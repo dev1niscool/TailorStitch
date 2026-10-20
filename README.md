@@ -25,7 +25,7 @@ The bundled **Try it with an example** uses original fictional screenshots and e
 - On-device processing in a web worker, with cancellation.
 - PNG export and supported browser/native share sheets.
 - Responsive, installable web app with offline support after its initial cache completes.
-- Bundled iPhone app using Capacitor, native sharing, an Xcode project, and simulator CI.
+- Bundled iPhone app using Capacitor, native sharing, an Xcode project, simulator CI, and an unsigned device IPA for sideload signing.
 
 ## Development
 
@@ -52,6 +52,12 @@ See [publishing instructions](docs/PUBLISHING.md), [iPhone installation and sign
 ## iPhone
 
 The native iPhone app bundles the same interface and engine in a local WKWebView. It does not require the website to be reachable.
+
+**[Download the unsigned iPhone IPA](https://github.com/dev1niscool/TailorStitch/releases/latest/download/TailorStitch-unsigned.ipa)** from [GitHub Releases](https://github.com/dev1niscool/TailorStitch/releases/latest), then follow the [sideloading guide](docs/SIDELOADING.md). Recipients sign the IPA using their own sideloading tool; the build needs no owner's Apple credentials. Tapping the download alone does not install it.
+
+Release downloads follow repository visibility. While this repository is private, only people with repository access can download them.
+
+To build and run from source instead:
 
 ```sh
 npm run ios:sync

@@ -21,6 +21,31 @@ The web workflow installs pinned dependencies, runs the pixel-level stitching te
 
 The separate iPhone workflow builds an unsigned simulator application on macOS, launches it on an iPhone simulator, and uploads the simulator application and launch screenshot. It does not publish to the App Store or produce a signed device `.ipa`.
 
+## iPhone IPA releases
+
+The separate `ios-ipa.yml` workflow builds an unsigned ARM64 device application in Release configuration and packages it as `Payload/App.app` inside **`TailorStitch-unsigned.ipa`**. It does not use an Apple account, signing certificate, or provisioning profile. The device package is validated before publication.
+
+Version tags beginning with `v` (matching `package.json`, such as `v1.0.0`) publish a [GitHub Release](https://github.com/dev1niscool/TailorStitch/releases) containing:
+
+- `TailorStitch-unsigned.ipa`
+- `SHA256SUMS`
+- `build-info.json`
+
+Releases are tied to the verified source tag and existing release assets are not silently overwritten. The [sideloading guide](SIDELOADING.md) explains recipient signing and installation. Unsigned device packages and simulator applications are different artifacts.
+
+You can also run **Build iPhone sideload IPA** manually from Actions. Leave **publish** unchecked for an artifact-only build. Check it to publish the current package version as a new release and create its version tag at the verified source commit. An existing release is never overwritten.
+
+For a local device package on a Mac with Xcode 26.3 selected:
+
+```sh
+npm ci
+bash scripts/build-ipa.sh
+```
+
+Outputs are in `build/ipa/`. The script builds and syncs the web app, archives the native Release target, preserves embedded native libraries, appends their license notices, validates all Mach-O binaries as iOS device code, and creates the IPA and metadata.
+
+GitHub Release visibility follows the repository. A release in this private repository is available to people with repository access; publishing it does not make the download public or change repository visibility.
+
 ## Local production preview
 
 ```sh

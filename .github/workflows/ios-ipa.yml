@@ -1,0 +1,97 @@
+name: Build iPhone sideload IPA
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish a new GitHub Release for the package.json version'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ipa-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 25
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Select Xcode 26.3
+        run: sudo xcode-select --switch /Applications/Xcode_26.3.app/Contents/Developer
+      - name: Read and verify release version
+        id: version
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "Tag must match package.json version v$version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - run: npm ci
+      - run: npm test
+      - name: Build and verify unsigned iPhone IPA
+        run: bash scripts/build-ipa.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TailorStitch-unsigned-ipa
+          path: |
+            build/ipa/TailorStitch-unsigned.ipa
+            build/ipa/SHA256SUMS
+            build/ipa/build-info.json
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    if: github.event_name == 'push' || inputs.publish
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: TailorStitch-unsigned-ipa
+          path: release
+      - name: Recheck artifact before publication
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          (cd release && sha256sum --check SHA256SUMS)
+          python3 - <<'PY'
+          import json, os
+          info = json.load(open('release/build-info.json'))
+          assert info['source_commit'] == os.environ['GITHUB_SHA'], 'Source commit mismatch'
+          assert info['version'] == os.environ['VERSION'], 'Release version mismatch'
+          PY
+          python3 scripts/verify-ipa.py release/TailorStitch-unsigned.ipa \
+            --source-commit "$GITHUB_SHA" --expected-version "$VERSION"
+      - name: Publish new release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          tag="v$VERSION"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists; refusing to replace its artifacts." >&2
+            exit 1
+          fi
+          gh release create "$tag" \
+            --target "$GITHUB_SHA" \
+            --title "TailorStitch $VERSION — iPhone sideload build" \
+            --notes-file docs/IPA-RELEASE-NOTES.md \
+            release/TailorStitch-unsigned.ipa release/SHA256SUMS release/build-info.json
