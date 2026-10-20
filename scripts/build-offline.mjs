@@ -2,6 +2,21 @@ import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 
+// Keep the runtime packages' notices with both web and bundled iPhone builds.
+const licensePaths = [
+  '@capacitor/core/LICENSE',
+  '@capacitor/ios/LICENSE',
+  '@capacitor/filesystem/LICENSE',
+  '@capacitor/share/LICENSE',
+  '@capacitor/synapse/LICENSE.md',
+  'tslib/LICENSE.txt',
+  'tslib/CopyrightNotice.txt',
+];
+const notices = await Promise.all(licensePaths.map(async path =>
+  `${path}\n${'='.repeat(path.length)}\n${await readFile(join('node_modules', path), 'utf8')}`,
+));
+await writeFile('dist/THIRD_PARTY_NOTICES.txt', notices.join('\n\n'));
+
 async function collect(dir) {
   const entries = await readdir(dir, { withFileTypes: true });
   const groups = await Promise.all(entries.map(async entry => {
