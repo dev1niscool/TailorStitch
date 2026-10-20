@@ -8,7 +8,7 @@ Open the published TailorStitch web app in Safari. Use Safari's Share menu → *
 
 ## Build the native app
 
-Requirements: a Mac, Node.js 22 or newer, Xcode 26 or newer, and an iPhone running iOS 15 or newer. The project uses Swift Package Manager; Xcode downloads its native dependencies when first opened. See [Capacitor's iOS requirements](https://capacitorjs.com/docs/ios) and [Swift Package Manager support](https://capacitorjs.com/docs/ios/spm).
+Requirements: a Mac, Node.js 22 or newer, Xcode 26 or newer, and an iPhone running iOS 15.4 or newer. The project uses Swift Package Manager; Xcode downloads its native dependencies when first opened. See [Capacitor's iOS requirements](https://capacitorjs.com/docs/ios) and [Swift Package Manager support](https://capacitorjs.com/docs/ios/spm).
 
 From the repository root:
 
@@ -49,7 +49,11 @@ xcodebuild \
   build
 ```
 
-The **Build iPhone simulator app** GitHub Actions workflow performs this build on macOS, launches it on an iPhone simulator, and captures a screenshot. Its zipped `.app` artifact is for an iOS simulator on a Mac. It is not a signed `.ipa` and cannot be installed directly on a physical iPhone. This smoke check does not replace a physical-device test of Photos selection, memory limits, safe areas, and sharing.
+The **Build iPhone simulator app** GitHub Actions workflow performs this build on macOS, launches it on an iPhone simulator, and runs the three-image example inside the actual bundled WKWebView. It checks that stitching creates a 420 × 1580 PNG-ready result and uploads a JSON report and screenshot.
+
+The smoke harness in `SceneDelegate.swift` is compiled only for Debug and runs only when the simulator launch sets `TAILORSTITCH_SMOKE_TEST=1`. It clicks the normal example button and checks the resulting canvas and save button, exercising the app's real image loading and worker path. Release builds exclude this harness.
+
+The zipped `.app` artifact is for an iOS simulator on a Mac. It is not a signed `.ipa` and cannot be installed directly on a physical iPhone. This smoke check does not replace a physical-device test of Photos selection, memory limits, safe areas, and sharing.
 
 ## Native privacy and exports
 

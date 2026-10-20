@@ -127,6 +127,7 @@ async function decode(file: File): Promise<Screenshot> {
     }
     const width = Math.min(MAX_WIDTH, originalWidth);
     const height = Math.round(originalHeight * width / originalWidth);
+    if (height > MAX_OUTPUT_HEIGHT) throw new Error(`${file.name} is too tall for a mobile canvas. Choose an image no taller than 16,384 processed pixels.`);
     const surface = document.createElement('canvas');
     surface.width = width;
     surface.height = height;
@@ -169,8 +170,8 @@ async function addFiles(files: File[]) {
     screenshots.push(...additions);
     manualOverlaps = {};
     clearResult();
-    renderInputs();
     setBusy(false);
+    renderInputs();
     if (screenshots.length > 1) await stitch();
     else notice('One screenshot added. Add the next overlapping screenshot to start stitching.');
   } catch (error) {

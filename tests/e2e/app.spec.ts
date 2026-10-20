@@ -44,7 +44,7 @@ async function syntheticPng(page: Page, name: string, width: number, color: stri
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.goto('/');
+  await page.goto('./');
 });
 
 test('empty workspace is responsive and dialogs support keyboard dismissal', async ({ page }) => {
@@ -85,6 +85,14 @@ test('demo creates pixel-perfect PNG without image upload and can be downloaded'
   expect(writes).toEqual([]);
   expect(errors).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
+  const clippedControls = await page.locator('#image-list').evaluate(list => {
+    const bounds = list.getBoundingClientRect();
+    return Array.from(list.querySelectorAll('button')).filter(button => {
+      const box = button.getBoundingClientRect();
+      return box.left < bounds.left - 1 || box.right > bounds.right + 1;
+    }).map(button => button.getAttribute('aria-label'));
+  });
+  expect(clippedControls).toEqual([]);
 });
 
 test('automatic order repairs shuffled screenshot selection', async ({ page }) => {
@@ -143,6 +151,15 @@ test('rejects unsupported images and mixed screenshot widths without corrupting 
   await page.locator('#file-input').setInputFiles([fixture('01.png'), fixture('02.png')]);
   await expectFinished(page);
   await expect(page.getByRole('button', { name: 'Save PNG' })).toBeEnabled();
+});
+
+test('a single screenshot can be removed before stitching starts', async ({ page }) => {
+  await page.locator('#file-input').setInputFiles(fixture('01.png'));
+  await expect(page.locator('#image-count')).toHaveText('1');
+  await expect(page.getByRole('button', { name: 'Remove screenshot 1', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Remove screenshot 1', exact: true }).click();
+  await expect(page.locator('#image-count')).toHaveText('0');
+  await expect(page.getByRole('button', { name: 'Save PNG' })).toBeDisabled();
 });
 
 test('installed web assets reload and stitch without a connection', async ({ page, context }) => {

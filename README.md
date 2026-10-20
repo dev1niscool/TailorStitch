@@ -2,7 +2,7 @@
 
 **Overlapping screenshots, one complete picture.** A free screenshot stitcher for the web and iPhone. All image processing happens on the device, with no account, image upload, ads, or watermarks.
 
-![TailorStitch icon](public/icons/icon-192.png)
+![TailorStitch web workspace with its sample screenshots](docs/preview.png)
 
 ## Use it
 

@@ -34,9 +34,11 @@ self.addEventListener('fetch', event => {
     event.respondWith(fetch(request).then(response => {
       if (!response.ok) throw new Error('Offline');
       return response;
-    }).catch(() => caches.open(CACHE).then(cache => cache.match(new URL('./index.html', self.registration.scope).href))));
+    }).catch(() => caches.open(CACHE).then(cache => cache.match(new URL('./index.html', self.registration.scope).href, { ignoreVary: true }))));
   } else if (URLS.has(request.url)) {
-    event.respondWith(caches.open(CACHE).then(async cache => (await cache.match(request)) || fetch(request)));
+    // The allowlisted files are immutable app assets. Preview/static hosts may
+    // vary CORS headers even though the response bytes are identical.
+    event.respondWith(caches.open(CACHE).then(async cache => (await cache.match(request, { ignoreVary: true })) || fetch(request)));
   }
 });
 `;
