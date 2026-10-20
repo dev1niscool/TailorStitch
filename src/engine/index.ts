@@ -154,9 +154,9 @@ function signature(image: PixelImage): Signature {
 
 function rowError(a: Signature, ay: number, b: Signature, by: number): number {
   let error = 0;
-  // The central 60% avoids a changed clock, scrollbar or peripheral controls.
+  // The central half avoids a changed clock, scrollbar or peripheral controls.
   // This is only chrome detection; overlap matching still uses the full width.
-  const sideColumns = 6;
+  const sideColumns = 8;
   for (let x = sideColumns; x < COLUMNS - sideColumns; x++) {
     for (let c = 0; c < 3; c++) {
       error += Math.abs(a.values[ay * CHANNELS + x * 3 + c]! -
@@ -242,8 +242,6 @@ function evaluate(
 function verifyDetails(
   first: PixelImage, second: PixelImage, aStart: number, bStart: number, overlap: number,
 ): { edges: number; mismatchedFraction: number } {
-  let edges = 0;
-  let mismatched = 0;
   const xStep = Math.max(1, Math.floor(first.width / 420));
   const yStep = Math.max(1, Math.floor(overlap / 1000));
   const left = Math.max(1, Math.round(first.width * 0.02));
@@ -251,25 +249,79 @@ function verifyDetails(
   const luminance = (image: PixelImage, x: number, y: number) =>
     channel(image, x, y, 0) * 0.299 + channel(image, x, y, 1) * 0.587 +
     channel(image, x, y, 2) * 0.114;
+  // Resizing a screenshot turns an integer scroll into a fractional-pixel
+  // translation. Fit one shift for the entire overlap, rather than independently
+  // moving each edge (which could make different letters appear to agree).
+  const shifts = [-0.5, -0.25, 0, 0.25, 0.5];
+  const errors = shifts.map(() => ({ edges: 0, mismatched: 0, error: 0 }));
   for (let offset = 1; offset < overlap - 1; offset += yStep) {
     const ay = aStart + offset;
     const by = bStart + offset;
     for (let x = left; x < right; x += xStep) {
       const a = luminance(first, x, ay);
+      const ar = luminance(first, x + 1, ay);
+      const ad = luminance(first, x, ay + 1);
       const b = luminance(second, x, by);
-      const edge = Math.max(
-        Math.abs(a - luminance(first, x + 1, ay)),
-        Math.abs(b - luminance(second, x + 1, by)),
-        Math.abs(a - luminance(first, x, ay + 1)),
-        Math.abs(b - luminance(second, x, by + 1)),
-      );
-      if (edge > 20) {
-        edges++;
-        if (Math.abs(a - b) > 24) mismatched++;
+      const bu = luminance(second, x, by - 1);
+      const bd = luminance(second, x, by + 1);
+      const br = luminance(second, x + 1, by);
+      const edge = Math.max(Math.abs(a - ar), Math.abs(a - ad),
+        Math.abs(b - br), Math.abs(b - bd));
+      if (edge <= 20) continue;
+      for (let i = 0; i < shifts.length; i++) {
+        const shift = shifts[i]!;
+        const adjusted = b * (1 - Math.abs(shift)) +
+          (shift < 0 ? bu : bd) * Math.abs(shift);
+        const difference = Math.abs(a - adjusted);
+        const result = errors[i]!;
+        result.edges++;
+        result.error += difference;
+        if (difference > 24) result.mismatched++;
       }
     }
   }
-  return { edges, mismatchedFraction: edges ? mismatched / edges : 0 };
+  errors.sort((a, b) => a.mismatched - b.mismatched || a.error - b.error);
+  const best = errors[0]!;
+  return { edges: best.edges,
+    mismatchedFraction: best.edges ? best.mismatched / best.edges : 0 };
+}
+
+/**
+ * Place a verified join inside the shared content. Screenshot edges can contain
+ * a composer border, translucent toolbar, or partially obscured message even
+ * when the estimated fixed-bar boundary is only a few rows off.
+ */
+function seamOffset(
+  first: PixelImage, second: PixelImage, match: PairMatch, top: number, bottom: number,
+): number {
+  const overlap = match.overlap;
+  if (overlap < 8) return overlap;
+  const a = signature(first);
+  const b = signature(second);
+  const aStart = first.height - bottom - match.bottomTrim - overlap;
+  const bStart = top + match.topTrim;
+  const start = Math.max(2, Math.floor(overlap * 0.2));
+  const end = Math.min(overlap - 2, Math.ceil(overlap * 0.8));
+  let best = Math.round(overlap / 2);
+  let bestScore = Infinity;
+  for (let offset = start; offset <= end; offset++) {
+    let error = 0;
+    let detail = 0;
+    for (let dy = -1; dy <= 1; dy++) {
+      const ay = aStart + offset + dy;
+      const by = bStart + offset + dy;
+      detail += Math.max(a.energy[ay]!, b.energy[by]!);
+      for (let c = 0; c < CHANNELS; c++) {
+        error += Math.abs(a.values[ay * CHANNELS + c]! - b.values[by * CHANNELS + c]!);
+      }
+    }
+    // Prefer agreement and a quiet row; use the center to break otherwise
+    // equivalent ties. This changes the source seam, never the inferred shift.
+    const score = error / (CHANNELS * 3) + detail * 0.02 +
+      Math.abs(offset - overlap / 2) / overlap * 0.5;
+    if (score < bestScore) { bestScore = score; best = offset; }
+  }
+  return best;
 }
 
 /**
@@ -469,8 +521,10 @@ export function planStitch(images: PixelImage[], options: PlanOptions = {}): Sti
       warnings.push(`Join ${position}: ${match.reason}`);
     }
     joins.push({ ...match, fromIndex, toIndex, manual, appliedOverlap: overlap });
-    trimTail(placements, bottomTrim);
-    const sy = top + topTrim + overlap;
+    const seam = accepted && !manual ?
+      seamOffset(images[fromIndex]!, images[toIndex]!, match, top, bottom) : overlap;
+    trimTail(placements, bottomTrim + overlap - seam);
+    const sy = top + topTrim + seam;
     const sh = images[toIndex]!.height - bottom - sy;
     const last = placements[placements.length - 1];
     if (sh > 0) placements.push({ imageIndex: toIndex, sx: 0, sy, sw: width, sh,
