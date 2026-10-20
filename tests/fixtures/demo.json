@@ -1,0 +1,27 @@
+{
+  "description": "Original fictional travel guide; crops from one continuous image.",
+  "files": [
+    "public/demo/01.png",
+    "public/demo/02.png",
+    "public/demo/03.png"
+  ],
+  "source": "tests/fixtures/demo-source.png",
+  "expectedWithChrome": "tests/fixtures/demo-expected.png",
+  "width": 420,
+  "screenshotHeight": 780,
+  "header": 74,
+  "footer": 36,
+  "contentViewportHeight": 670,
+  "offsets": [
+    0,
+    400,
+    800
+  ],
+  "pairOverlaps": [
+    270,
+    270
+  ],
+  "sourceHeight": 1470,
+  "expectedHeightWithChrome": 1580,
+  "expectedHeightWithoutChrome": 1470
+}
