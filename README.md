@@ -1,0 +1,2 @@
+# TailorStitch
+Screenshot Stitcher
