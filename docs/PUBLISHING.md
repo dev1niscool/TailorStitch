@@ -44,7 +44,7 @@ bash scripts/build-ipa.sh
 
 Outputs are in `build/ipa/`. The script builds and syncs the web app, archives the native Release target, preserves embedded native libraries, appends their license notices, validates all Mach-O binaries as iOS device code, and creates the IPA and metadata.
 
-GitHub Release visibility follows the repository. A release in this private repository is available to people with repository access; publishing it does not make the download public or change repository visibility.
+GitHub Release visibility follows the repository. TailorStitch is currently public, so its release downloads are public too. The workflow never changes repository visibility.
 
 ## Local production preview
 

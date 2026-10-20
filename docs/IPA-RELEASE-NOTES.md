@@ -8,4 +8,4 @@ Download **TailorStitch-unsigned.ipa** and import it into Sideloadly or AltStore
 - `SHA256SUMS` verifies the download. `build-info.json` identifies the source commit and validated device binaries.
 - The app's stitching flow has been tested in the iPhone simulator. Installation and sharing on a physical phone after recipient signing have not been verified.
 
-This release inherits the repository's visibility. While the repository is private, only people with repository access can download it.
+This is a public release. No GitHub account is required to download the IPA.

@@ -6,7 +6,9 @@
 
 ## Use it
 
-The GitHub Pages deployment target is **https://dev1niscool.github.io/TailorStitch/**. Deployment is handled by [Test and publish web app](../../actions/workflows/web.yml); the URL becomes available after GitHub Pages is enabled and the deployment succeeds.
+**[Open TailorStitch on the web](https://dev1niscool.github.io/TailorStitch/)** · **[Download the iPhone IPA](https://github.com/dev1niscool/TailorStitch/releases/latest/download/TailorStitch-unsigned.ipa)**
+
+The web app is published on GitHub Pages. Future updates are deployed by [Test and publish web app](../../actions/workflows/web.yml).
 
 1. Take overlapping screenshots while scrolling vertically. Keep about a third of the previous screen visible.
 2. Add two or more PNG, JPEG, or WebP images from the same screen size. They are automatically matched and stitched.
@@ -55,7 +57,7 @@ The native iPhone app bundles the same interface and engine in a local WKWebView
 
 **[Download the unsigned iPhone IPA](https://github.com/dev1niscool/TailorStitch/releases/latest/download/TailorStitch-unsigned.ipa)** from [GitHub Releases](https://github.com/dev1niscool/TailorStitch/releases/latest), then follow the [sideloading guide](docs/SIDELOADING.md). Recipients sign the IPA using their own sideloading tool; the build needs no owner's Apple credentials. Tapping the download alone does not install it.
 
-Release downloads follow repository visibility. While this repository is private, only people with repository access can download them.
+The repository and release downloads are public. No GitHub account is required to download the IPA.
 
 To build and run from source instead:
 

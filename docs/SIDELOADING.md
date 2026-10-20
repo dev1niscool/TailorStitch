@@ -4,7 +4,7 @@ Download **[TailorStitch-unsigned.ipa](https://github.com/dev1niscool/TailorStit
 
 The app requires **iOS 15.4 or newer**. This IPA contains the ARM64 device application, not the simulator build. It is unsigned: the project can build and publish it without the owner's Apple credentials, but a recipient must sign it through a sideloading tool before installation. Downloading or tapping the IPA alone does not install it.
 
-**Download access:** this repository is currently private. GitHub requires an account with repository access to download its releases. Public distribution requires the owner to change distribution visibility; the build workflow does not do that.
+**Download access:** this repository and its releases are public. No GitHub account is required to download the IPA.
 
 ## Install with Sideloadly
 
