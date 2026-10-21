@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { planStitch } from '../src/engine/index.ts';
-import { centralPixels, darkChatFixture, renderPlan, resizeImage } from './chat-fixture.ts';
+import { centralPixels, darkChatFixture, renderPlan, resizeImage, tintedChatFixture } from './chat-fixture.ts';
 
 test('dark chat with a sparse attachment and changing controls stays one thread', () => {
   const { images, expected, header, footer } = darkChatFixture(false);
@@ -44,5 +44,45 @@ test('resized chat screenshots match when the scroll offset falls between pixels
       assert.ok(Math.abs(placement.dy - placement.sy - starts[placement.imageIndex]! * scale) <= 1,
         'each retained region must map to its original location in the continuous thread');
     }
+  }
+});
+
+test('viewport-relative bubble gradients preserve one continuous four-screenshot thread', () => {
+  for (const gradient of [70, 110]) {
+    const { images, starts, height } = tintedChatFixture(false, false, { gradient });
+    const plan = planStitch(images, { autoOrder: true });
+    assert.equal(plan.needsReview, false);
+    assert.deepEqual(plan.order, [0, 1, 2, 3]);
+    assert.equal(plan.height, height);
+    for (const placement of plan.placements) {
+      assert.equal(placement.dy - placement.sy, starts[placement.imageIndex],
+        'every rendered region must retain its exact position in the source thread');
+    }
+  }
+});
+
+test('matching bright bubble shapes with different message text still require review', () => {
+  const { images } = tintedChatFixture(true);
+  const plan = planStitch(images.slice(0, 2));
+  assert.equal(plan.needsReview, true);
+  assert.equal(plan.joins[0]!.appliedOverlap, 0);
+  assert.equal(plan.height, images[0]!.height + images[1]!.height);
+});
+
+test('bright bubble outlines cannot vouch for different sparse short messages', () => {
+  const { images } = tintedChatFixture(true, true);
+  const plan = planStitch(images.slice(0, 2));
+  assert.equal(plan.needsReview, true);
+  assert.equal(plan.joins[0]!.appliedOverlap, 0);
+  assert.equal(plan.height, images[0]!.height + images[1]!.height);
+});
+
+test('recolored bubble outlines alone are insufficient evidence to remove content', () => {
+  for (const rounded of [false, true]) {
+    const { images } = tintedChatFixture(false, false, { drawText: false, rounded });
+    const plan = planStitch(images.slice(0, 2));
+    assert.equal(plan.needsReview, true, `${rounded ? 'rounded' : 'rectangular'} outlines need interior evidence`);
+    assert.equal(plan.joins[0]!.appliedOverlap, 0);
+    assert.equal(plan.height, images[0]!.height + images[1]!.height);
   }
 });

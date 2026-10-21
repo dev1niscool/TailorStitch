@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { readPng } from '../png-fixture';
+import { tintedChatFixture } from '../chat-fixture';
 
 const fixture = (name: string) => path.resolve('public/demo', name);
 const expected = readPng(pathToFileURL(path.resolve('tests/fixtures/demo-expected.png')));
@@ -102,6 +103,27 @@ test('automatic order repairs shuffled screenshot selection', async ({ page }) =
   await expect(page.getByRole('button', { name: 'Save PNG' })).toBeEnabled();
   expect(await outputHash(page)).toBe(expectedHash);
   await expect(page.locator('#notice')).toContainText('Detected order: 2 → 3 → 1');
+});
+
+test('viewport-relative chat bubble colors stitch without manual overlap adjustments', async ({ page }) => {
+  const { images, height } = tintedChatFixture();
+  const pngs = await page.evaluate(images => images.map(image => {
+    const canvas = document.createElement('canvas');
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const pixels = Uint8ClampedArray.from(atob(image.base64), byte => byte.charCodeAt(0));
+    canvas.getContext('2d')!.putImageData(new ImageData(pixels, image.width, image.height), 0, 0);
+    return canvas.toDataURL('image/png').split(',')[1]!;
+  }), images.map(image => ({ width: image.width, height: image.height,
+    base64: Buffer.from(image.data).toString('base64') })));
+  await page.locator('#file-input').setInputFiles(pngs.map((png, i) => ({
+    name: `fictional-chat-${i + 1}.png`, mimeType: 'image/png', buffer: Buffer.from(png, 'base64'),
+  })));
+  await expect(page.locator('#image-count')).toHaveText('4');
+  await expectFinished(page);
+  await expect(page.getByRole('button', { name: 'Save PNG' })).toBeEnabled();
+  await expect(page.locator('#output-canvas')).toHaveAttribute('height', String(height));
+  await expect(page.locator('.join-status')).toHaveText(['Matched', 'Matched', 'Matched']);
 });
 
 test('manual reordering takes precedence, removal and clear release results', async ({ page }) => {

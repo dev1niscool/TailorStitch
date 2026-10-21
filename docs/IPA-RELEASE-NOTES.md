@@ -1,9 +1,9 @@
-Version **1.0.1** improves automatic stitching of text conversations:
+Version **1.0.2** fixes a rejected overlap in text conversations:
 
-- Joins use clean rows inside the shared content, avoiding repeated composer borders and obscured messages.
-- Resized screenshots can match when the scroll offset falls between pixels.
-- Changing navigation badges no longer interrupt repeated-header detection.
-- Added fictional chat regressions for sparse attachments, overlays, and resized text. The same engine powers the website and this iPhone build.
+- Matching text and image details can verify an overlap when message-bubble shading changes as the screen scrolls.
+- The matcher checks detailed content before rejecting a promising alignment based on its average color difference.
+- Ambiguous matches, plain backgrounds, and similar bubbles containing different text still require review.
+- Added fictional regression coverage for changing bubble colors and content preservation. The website and this iPhone build use the same corrected engine.
 
 An unsigned **ARM64 iPhoneOS Release build** for people to sign with their own sideloading tool. No Apple account, signing certificate, or provisioning profile was used to build this IPA.
 

@@ -106,6 +106,50 @@ export function darkChatFixture(overlays = true) {
   return { images, source, expected: bars(source), starts, header: HEADER, footer: FOOTER };
 }
 
+/** Blue message bubbles whose gradient is anchored to the viewport, not text. */
+export function tintedChatFixture(
+  differentText = false, sparseText = false,
+  options: { gradient?: number; drawText?: boolean; rounded?: boolean } = {},
+) {
+  const starts = [0, 340, 675, 880];
+  const makeSource = (seed: number) => {
+    const source = canvas(starts.at(-1)! + VIEWPORT);
+    for (const [index, y] of [12, 170, 345, 535, 705, 910, 1100, 1260].entries()) {
+      if (options.rounded) {
+        const radius = 30;
+        for (let row = 0; row < 155; row++) {
+          const distance = Math.max(0, radius - row - 0.5, row + 0.5 - (155 - radius));
+          const inset = Math.ceil(radius - Math.sqrt(radius ** 2 - distance ** 2));
+          rect(source, 60 + inset, y + row, 245 - inset * 2, 1, [9, 143, 249]);
+        }
+      } else {
+        rect(source, 60, y, 245, 155, [9, 143, 249]);
+      }
+      for (let line = 0; options.drawText !== false && line < (sparseText ? 1 : 8); line++) {
+        glyphs(source, 74, y + 13 + line * 17, sparseText ? 4 : 29,
+          900 + seed + index * 117 + line * 7);
+      }
+    }
+    return source;
+  };
+  const source = makeSource(0);
+  const images = starts.map((start, index) => {
+    const document = differentText ? makeSource(index * 10000) : source;
+    const body: PixelImage = { width: WIDTH, height: VIEWPORT,
+      data: document.data.slice(start * WIDTH * 4, (start + VIEWPORT) * WIDTH * 4) };
+    for (let y = 0; y < VIEWPORT; y++) {
+      for (let x = 0; x < WIDTH; x++) {
+        const p = (y * WIDTH + x) * 4;
+        if (body.data[p] === 9 && body.data[p + 1] === 143 && body.data[p + 2] === 249) {
+          body.data[p] = Math.round((options.gradient ?? 70) * (1 - y / VIEWPORT));
+        }
+      }
+    }
+    return bars(body);
+  });
+  return { images, starts, height: source.height + HEADER + FOOTER };
+}
+
 export function renderPlan(images: PixelImage[], plan: StitchPlan): PixelImage {
   const image = canvas(plan.height);
   for (const p of plan.placements) {

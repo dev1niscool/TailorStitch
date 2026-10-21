@@ -14,14 +14,21 @@ network, machine-learning, or third-party runtime dependency.
    status clock, navigation badge, or scrollbar does not prevent matching.
 3. Search possible bottom-to-top overlaps with vertically smoothed signatures,
    then refine separate promising peaks at individual source-pixel offsets.
-4. Verify the leading candidates with denser row sampling. Reject featureless,
-   poor, or ambiguous matches instead of choosing an arbitrary cut.
+   Compare both RGB values and adjacent-column contrast, so a message bubble's
+   viewport-dependent color gradient does not hide its matching text layout.
+4. Verify the leading candidates with denser row sampling. Reject featureless
+   or ambiguous matches instead of choosing an arbitrary cut.
 5. Check original pixels around high-contrast edges. This prevents matching two
    chat screens merely because their bubble layouts look similar while their
    message text differs. Fit one shared fractional-row offset during verification
    to tolerate resizing that puts the scroll translation between pixels. The
    same offset must explain the whole overlap; individual letters cannot shift
    independently to manufacture a match.
+6. Before rejecting a unique alignment for its average color difference, also
+   check signed local contrast at original-pixel detail. Color changes can be
+   accepted only with substantial matching features across multiple rows and
+   vertical regions. Long bubble outlines or a matching icon alone cannot
+   establish that differently colored screenshots contain the same messages.
 
 The confidence value is a heuristic based on image agreement and the separation
 between competing alignments. It is not a calibrated probability.
@@ -72,7 +79,10 @@ chrome, changing status-clock pixels, shuffled screenshots, exact duplicates,
 different heights, noisy pixels, small overlaps, wide images, manual crops,
 unrelated screens, repeated patterns, and similar chat layouts with different
 text. Fictional dark-chat regressions also cover sparse image attachments,
-changing navigation badges, composer overlays, and fractional resizing, with
+changing navigation badges, composer overlays, fractional resizing, and bubble
+gradients that change with viewport position, with
 pixel comparisons or source-coordinate checks for missing/duplicated content.
+The browser suite also imports a fictional four-screenshot gradient conversation
+and verifies automatic matching and export without manual overlap adjustments.
 Synthetic and bundled-fixture tests do not establish that every real-world
 app or screenshot can be automatically stitched.

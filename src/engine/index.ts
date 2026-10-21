@@ -77,6 +77,7 @@ interface Signature {
 interface Candidate {
   overlap: number;
   error: number;
+  structureError: number;
   informative: number;
   samples: number;
   score: number;
@@ -212,6 +213,7 @@ function evaluate(
   const bv = blurred ? b.smooth : b.values;
   const count = Math.min(overlap, maxSamples);
   let sum = 0;
+  let structuralSum = 0;
   let weights = 0;
   let informative = 0;
   for (let row = 0; row < count; row++) {
@@ -222,26 +224,44 @@ function evaluate(
     if (detail > 2.8) informative++;
     const weight = 1 + Math.min(5, detail / 5);
     let difference = 0;
+    let structuralDifference = 0;
     for (let c = 0; c < CHANNELS; c++) {
       difference += Math.abs(av[ay * CHANNELS + c]! - bv[by * CHANNELS + c]!);
+      if (c >= 3) {
+        structuralDifference += Math.abs(
+          (av[ay * CHANNELS + c]! - av[ay * CHANNELS + c - 3]!) -
+          (bv[by * CHANNELS + c]! - bv[by * CHANNELS + c - 3]!));
+      }
     }
     sum += difference / CHANNELS * weight;
+    structuralSum += structuralDifference / (CHANNELS - 3) * weight;
     weights += weight;
   }
   const error = sum / weights;
+  const structureError = structuralSum / weights;
   // Featureless overlaps must never win merely because the background is white.
   const detailPenalty = informative < 5 ? (5 - informative) * 5 : 0;
-  return { overlap, error, informative, samples: count,
-    score: error + detailPenalty + 1 / Math.sqrt(overlap) };
+  // A scrolling view may recolor the same message bubble according to screen
+  // position. Adjacent-column contrasts retain its layout without requiring the
+  // background color to agree. Dense original-pixel verification still decides
+  // whether the text/image content actually matches.
+  return { overlap, error, structureError, informative, samples: count,
+    score: Math.min(error, structureError * 1.25) + detailPenalty + 1 / Math.sqrt(overlap) };
 }
 
 /**
  * Shared white backgrounds and chat-bubble layouts are not enough evidence.
  * Verify text/image edges at much denser resolution than the search signatures.
  */
+interface DetailEvidence {
+  edges: number;
+  mismatchedFraction: number;
+  structuralMatch: boolean;
+}
+
 function verifyDetails(
   first: PixelImage, second: PixelImage, aStart: number, bStart: number, overlap: number,
-): { edges: number; mismatchedFraction: number } {
+): DetailEvidence {
   const xStep = Math.max(1, Math.floor(first.width / 420));
   const yStep = Math.max(1, Math.floor(overlap / 1000));
   const left = Math.max(1, Math.round(first.width * 0.02));
@@ -249,41 +269,105 @@ function verifyDetails(
   const luminance = (image: PixelImage, x: number, y: number) =>
     channel(image, x, y, 0) * 0.299 + channel(image, x, y, 1) * 0.587 +
     channel(image, x, y, 2) * 0.114;
-  // Resizing a screenshot turns an integer scroll into a fractional-pixel
-  // translation. Fit one shift for the entire overlap, rather than independently
-  // moving each edge (which could make different letters appear to agree).
+  const featureRadius = Math.max(2, Math.round(first.width / 200));
+  const hasNarrowFeature = (image: PixelImage, x: number, y: number, value: number) => {
+    const opposed = (before: number, after: number) =>
+      Math.abs(value - before) > 20 && Math.abs(value - after) > 20 &&
+      (value - before) * (value - after) > 0;
+    return opposed(luminance(image, Math.max(0, x - featureRadius), y),
+      luminance(image, Math.min(image.width - 1, x + featureRadius), y)) ||
+      opposed(luminance(image, x, Math.max(0, y - featureRadius)),
+        luminance(image, x, Math.min(image.height - 1, y + featureRadius)));
+  };
+  // One shift must explain the entire overlap; individual edges cannot move
+  // independently to make different letters appear to agree.
   const shifts = [-0.5, -0.25, 0, 0.25, 0.5];
-  const errors = shifts.map(() => ({ edges: 0, mismatched: 0, error: 0 }));
+  const errors = shifts.map(() => ({ edges: 0, mismatched: 0, error: 0,
+    structuralMismatches: 0, corners: 0, matchingCornerRows: 0,
+    firstMatchingRow: overlap, lastMatchingRow: 0,
+    regionCorners: new Uint32Array(9), regionMatches: new Uint32Array(9) }));
   for (let offset = 1; offset < overlap - 1; offset += yStep) {
     const ay = aStart + offset;
     const by = bStart + offset;
+    const rowCorners = new Uint32Array(shifts.length);
+    const rowMatches = new Uint32Array(shifts.length);
+    const rowBand = Math.min(2, Math.floor(offset * 3 / overlap));
     for (let x = left; x < right; x += xStep) {
       const a = luminance(first, x, ay);
-      const ar = luminance(first, x + 1, ay);
-      const ad = luminance(first, x, ay + 1);
+      const ax = a - luminance(first, x + 1, ay);
+      const ad = a - luminance(first, x, ay + 1);
       const b = luminance(second, x, by);
-      const bu = luminance(second, x, by - 1);
       const bd = luminance(second, x, by + 1);
       const br = luminance(second, x + 1, by);
-      const edge = Math.max(Math.abs(a - ar), Math.abs(a - ad),
-        Math.abs(b - br), Math.abs(b - bd));
+      const edge = Math.max(Math.abs(ax), Math.abs(ad), Math.abs(b - br), Math.abs(b - bd));
       if (edge <= 20) continue;
+      const bu = luminance(second, x, by - 1);
+      const bdd = luminance(second, x, Math.min(second.height - 1, by + 2));
+      const bru = luminance(second, x + 1, by - 1);
+      const brd = luminance(second, x + 1, by + 1);
+      const aMagnitude = Math.hypot(ax, ad);
+      let narrowFeature: boolean | undefined;
+      const region = rowBand * 3 + Math.min(2, Math.floor(x * 3 / first.width));
       for (let i = 0; i < shifts.length; i++) {
         const shift = shifts[i]!;
-        const adjusted = b * (1 - Math.abs(shift)) +
-          (shift < 0 ? bu : bd) * Math.abs(shift);
+        const t = Math.abs(shift);
+        const adjusted = b * (1 - t) + (shift < 0 ? bu : bd) * t;
+        const adjustedRight = br * (1 - t) + (shift < 0 ? bru : brd) * t;
+        const adjustedDown = bd * (1 - t) + (shift < 0 ? b : bdd) * t;
+        const bx = adjusted - adjustedRight;
+        const byGradient = adjusted - adjustedDown;
         const difference = Math.abs(a - adjusted);
         const result = errors[i]!;
         result.edges++;
         result.error += difference;
         if (difference > 24) result.mismatched++;
+        // Compare signed local contrast, not its background level. This allows
+        // viewport-dependent bubble tints while still distinguishing the letter
+        // strokes. Missing or reversed edges have a large normalized distance.
+        const magnitude = Math.max(20, aMagnitude + Math.hypot(bx, byGradient));
+        const agrees = (ax - bx) ** 2 + (ad - byGradient) ** 2 <= (0.38 * magnitude) ** 2;
+        if (!agrees) result.structuralMismatches++;
+        const corner = Math.max(Math.abs(ax), Math.abs(bx)) > 20 &&
+          Math.max(Math.abs(ad), Math.abs(byGradient)) > 20;
+        // A rounded bubble perimeter also has two-dimensional gradients. Text
+        // and image detail must additionally contain a narrow ridge or valley:
+        // opposing transitions nearby, rather than one smooth silhouette edge.
+        if (corner && (narrowFeature ??= hasNarrowFeature(first, x, ay, a) ||
+            hasNarrowFeature(second, x, by, b))) {
+          result.corners++;
+          result.regionCorners[region] = result.regionCorners[region]! + 1;
+          rowCorners[i] = rowCorners[i]! + 1;
+          if (agrees) {
+            result.regionMatches[region] = result.regionMatches[region]! + 1;
+            rowMatches[i] = rowMatches[i]! + 1;
+          }
+        }
+      }
+    }
+    for (let i = 0; i < errors.length; i++) {
+      if (rowCorners[i]! >= 2 && rowMatches[i]! / rowCorners[i]! >= 0.8) {
+        errors[i]!.matchingCornerRows++;
+        errors[i]!.firstMatchingRow = Math.min(errors[i]!.firstMatchingRow, offset);
+        errors[i]!.lastMatchingRow = offset;
       }
     }
   }
+  const structuralMatch = errors.some(result => {
+    const supported = [...result.regionCorners].map((count, region) =>
+      count >= 16 && result.regionMatches[region]! / count >= 0.8);
+    const supportedBands = [0, 1, 2].filter(band =>
+      supported.slice(band * 3, band * 3 + 3).some(Boolean));
+    // Long bubble outlines or a matching icon alone are insufficient. Require
+    // many corner-like features across separate rows and vertical regions.
+    return result.edges >= 128 && result.corners >= 64 &&
+      result.structuralMismatches / result.edges <= 0.2 &&
+      result.matchingCornerRows >= 6 && supportedBands.length >= 2 &&
+      result.lastMatchingRow - result.firstMatchingRow >= Math.max(12, first.width * 0.04);
+  });
   errors.sort((a, b) => a.mismatched - b.mismatched || a.error - b.error);
   const best = errors[0]!;
   return { edges: best.edges,
-    mismatchedFraction: best.edges ? best.mismatched / best.edges : 0 };
+    mismatchedFraction: best.edges ? best.mismatched / best.edges : 0, structuralMatch };
 }
 
 /**
@@ -398,19 +482,40 @@ export function analyzePair(
     Math.abs(x.overlap - best.overlap) > Math.max(4, stride));
   const next = alternatives[0];
   const gap = next ? next.score - best.score : 20;
-  const ambiguous = gap < Math.max(0.65, best.error * 0.14);
-  if (best.error > 16) return noMatch('No matching overlap was found. Check screenshot order.');
-  const fit = clamp(1 - best.error / 16, 0, 1);
+  const rankingError = Math.min(best.error, best.structureError * 1.25);
+  const ambiguous = gap < Math.max(0.65, rankingError * 0.14);
+  const fit = clamp(1 - rankingError / 16, 0, 1);
   const separation = clamp(gap / 8, 0, 1);
   const confidence = clamp(0.3 + fit * 0.52 + separation * 0.18, 0, 1);
-  if (best.error > 8 || ambiguous) {
+  if (ambiguous) {
     return { overlap: best.overlap, confidence: Math.min(0.64, confidence),
       status: 'uncertain', ...bars,
-      reason: ambiguous ? 'Repeated content makes this overlap ambiguous. Review the join.' :
-        'The overlap is only a partial match. Review the join.' };
+      reason: 'Repeated content makes this overlap ambiguous. Review the join.' };
   }
+  // If neither appearance nor layout agrees, there is no promising alignment
+  // to verify. Bound dense work to the single best unambiguous candidate.
+  if (rankingError > 16) return noMatch('No matching overlap was found. Check screenshot order.');
   const details = verifyDetails(first, second, aEnd - best.overlap, bStart, best.overlap);
-  if (details.edges >= 16 && details.mismatchedFraction > 0.2) {
+  const appearanceGap = alternatives.length ? Math.min(...alternatives.map(candidate =>
+    candidate.error + 1 / Math.sqrt(candidate.overlap))) -
+    (best.error + 1 / Math.sqrt(best.overlap)) : 20;
+  if (!details.structuralMatch && appearanceGap < Math.max(0.65, best.error * 0.14)) {
+    // A contrast-selected peak may sharpen an otherwise flat color match to a
+    // repeated icon. Without independent interior detail, the appearance path
+    // must also distinguish this alignment from its alternatives.
+    return { overlap: best.overlap, confidence: Math.min(0.64, confidence),
+      status: 'uncertain', ...bars,
+      reason: 'Repeated content makes this overlap ambiguous. Review the join.' };
+  }
+  if (best.error > 16 && !details.structuralMatch) {
+    return noMatch('No matching overlap was found. Check screenshot order.');
+  }
+  if (best.error > 8 && !details.structuralMatch) {
+    return { overlap: best.overlap, confidence: Math.min(0.64, confidence),
+      status: 'uncertain', ...bars,
+      reason: 'The overlap is only a partial match. Review the join.' };
+  }
+  if (details.edges >= 16 && details.mismatchedFraction > 0.2 && !details.structuralMatch) {
     return { overlap: best.overlap, confidence: Math.min(0.5, confidence),
       status: 'uncertain', ...bars,
       reason: 'The layouts look similar, but text or image details differ. Review the join.' };
