@@ -75,9 +75,3 @@ This version stitches **vertical screenshots of the same pixel width**. It canno
 Up to 12 images are accepted. Each source must be at most 25 MB and 24 megapixels. Sources wider than 1,440 px are resized to that width; the batch is limited to 20 megapixels after resizing. Output is limited to 16 megapixels and 16,384 px tall to reduce mobile canvas/memory failures. Crop and overlap values refer to these processed pixels.
 
 Screenshots stay in memory until cleared or the app closes. They are never cached by the service worker or uploaded. Native sharing creates a temporary file and removes it after the share sheet finishes. Hosting providers may log normal requests for website assets. See [privacy details](docs/PRIVACY.md).
-
-## Relationship to Tailor and REA
-
-TailorStitch is an **independent implementation inspired by [Tailor's public behavior](https://apps.apple.com/us/app/tailor-screenshot-stitching/id926653095)**. No Tailor source, decompiled code, artwork, branding, or original binary is included. The project owner reports permission from the original creator.
-
-The suggested [REA repository](https://github.com/morluto/rea) is a general reverse-engineering framework. Its [Apple analysis workflow](https://github.com/morluto/rea/blob/main/docs/apple-application-analysis.md) needs a supplied app bundle or binary. No such artifact was available, so REA was researched but not executed or added as a dependency. This implementation does not claim to recover Tailor's original algorithm.
