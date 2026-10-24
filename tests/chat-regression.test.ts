@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { planStitch } from '../src/engine/index.ts';
-import { centralPixels, darkChatFixture, renderPlan, resizeImage, tintedChatFixture } from './chat-fixture.ts';
+import { centralPixels, darkChatFixture, glassHeaderFixture, headerCropTrapFixture, periodicStickerFixture,
+  renderPlan, resizeImage, sharedStickerOnlyFixture, tintedChatFixture } from './chat-fixture.ts';
 
 test('dark chat with a sparse attachment and changing controls stays one thread', () => {
   const { images, expected, header, footer } = darkChatFixture(false);
@@ -85,4 +86,48 @@ test('recolored bubble outlines alone are insufficient evidence to remove conten
     assert.equal(plan.joins[0]!.appliedOverlap, 0);
     assert.equal(plan.height, images[0]!.height + images[1]!.height);
   }
+});
+
+test('a subtly tinted fixed header does not enter the conversation or hide a real overlap', () => {
+  const fixture = glassHeaderFixture();
+  for (const selection of [[0, 1, 2, 3], [2, 0, 3, 1]]) {
+    const images = selection.map(index => fixture.images[index]!);
+    const plan = planStitch(images, { autoOrder: true });
+    assert.equal(plan.needsReview, false);
+    assert.deepEqual(plan.order.map(index => selection[index]), [0, 1, 2, 3]);
+    assert.equal(plan.height, fixture.height);
+    for (const placement of plan.placements) {
+      assert.equal(placement.dy - placement.sy, fixture.starts[selection[placement.imageIndex]!],
+        'retained content must stay in its exact position in the full thread');
+    }
+    assert.deepEqual(
+      centralPixels(renderPlan(images, plan), fixture.header, plan.height - fixture.footer),
+      centralPixels(fixture.source, 0, fixture.source.height),
+      'every message and repeated sticker must appear once, with no internal contact header',
+    );
+  }
+});
+
+test('detailed repeated stickers require review when the scroll offset is ambiguous', () => {
+  const images = periodicStickerFixture();
+  const plan = planStitch(images);
+  assert.equal(plan.needsReview, true);
+  assert.equal(plan.joins[0]!.appliedOverlap, 0);
+  assert.equal(plan.height, images[0]!.height + images[1]!.height);
+});
+
+test('a common sticker and tinted header cannot hide different surrounding messages', () => {
+  const images = sharedStickerOnlyFixture();
+  const plan = planStitch(images);
+  assert.equal(plan.needsReview, true);
+  assert.equal(plan.joins[0]!.appliedOverlap, 0);
+  assert.equal(plan.height, images[0]!.height + images[1]!.height);
+});
+
+test('header recovery cannot crop away contradictory messages to match a shared sticker', () => {
+  const images = headerCropTrapFixture();
+  const plan = planStitch(images);
+  assert.equal(plan.needsReview, true);
+  assert.equal(plan.joins[0]!.appliedOverlap, 0);
+  assert.equal(plan.height, images[0]!.height + images[1]!.height);
 });

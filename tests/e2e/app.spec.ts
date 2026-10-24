@@ -4,7 +4,8 @@ import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { readPng } from '../png-fixture';
-import { tintedChatFixture } from '../chat-fixture';
+import { glassHeaderFixture, tintedChatFixture } from '../chat-fixture';
+import type { PixelImage } from '../../src/engine';
 
 const fixture = (name: string) => path.resolve('public/demo', name);
 const expected = readPng(pathToFileURL(path.resolve('tests/fixtures/demo-expected.png')));
@@ -42,6 +43,21 @@ async function syntheticPng(page: Page, name: string, width: number, color: stri
     return image.toDataURL('image/png').split(',')[1]!;
   }, { width, color });
   return { name, mimeType: 'image/png', buffer: Buffer.from(base64, 'base64') };
+}
+
+async function selectPixelFixture(page: Page, images: PixelImage[]) {
+  const pngs = await page.evaluate(images => images.map(image => {
+    const canvas = document.createElement('canvas');
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const pixels = Uint8ClampedArray.from(atob(image.base64), byte => byte.charCodeAt(0));
+    canvas.getContext('2d')!.putImageData(new ImageData(pixels, image.width, image.height), 0, 0);
+    return canvas.toDataURL('image/png').split(',')[1]!;
+  }), images.map(image => ({ width: image.width, height: image.height,
+    base64: Buffer.from(image.data).toString('base64') })));
+  await page.locator('#file-input').setInputFiles(pngs.map((png, i) => ({
+    name: `fictional-chat-${i + 1}.png`, mimeType: 'image/png', buffer: Buffer.from(png, 'base64'),
+  })));
 }
 
 test.beforeEach(async ({ page }) => {
@@ -107,23 +123,23 @@ test('automatic order repairs shuffled screenshot selection', async ({ page }) =
 
 test('viewport-relative chat bubble colors stitch without manual overlap adjustments', async ({ page }) => {
   const { images, height } = tintedChatFixture();
-  const pngs = await page.evaluate(images => images.map(image => {
-    const canvas = document.createElement('canvas');
-    canvas.width = image.width;
-    canvas.height = image.height;
-    const pixels = Uint8ClampedArray.from(atob(image.base64), byte => byte.charCodeAt(0));
-    canvas.getContext('2d')!.putImageData(new ImageData(pixels, image.width, image.height), 0, 0);
-    return canvas.toDataURL('image/png').split(',')[1]!;
-  }), images.map(image => ({ width: image.width, height: image.height,
-    base64: Buffer.from(image.data).toString('base64') })));
-  await page.locator('#file-input').setInputFiles(pngs.map((png, i) => ({
-    name: `fictional-chat-${i + 1}.png`, mimeType: 'image/png', buffer: Buffer.from(png, 'base64'),
-  })));
+  await selectPixelFixture(page, images);
   await expect(page.locator('#image-count')).toHaveText('4');
   await expectFinished(page);
   await expect(page.getByRole('button', { name: 'Save PNG' })).toBeEnabled();
   await expect(page.locator('#output-canvas')).toHaveAttribute('height', String(height));
   await expect(page.locator('.join-status')).toHaveText(['Matched', 'Matched', 'Matched']);
+});
+
+test('changing fixed headers and repeated stickers preserve the complete conversation', async ({ page }) => {
+  const { images, height } = glassHeaderFixture();
+  await selectPixelFixture(page, [images[2]!, images[0]!, images[3]!, images[1]!]);
+  await expect(page.locator('#image-count')).toHaveText('4');
+  await expectFinished(page);
+  await expect(page.getByRole('button', { name: 'Save PNG' })).toBeEnabled();
+  await expect(page.locator('#output-canvas')).toHaveAttribute('height', String(height));
+  await expect(page.locator('.join-status')).toHaveText(['Matched', 'Matched', 'Matched']);
+  await expect(page.locator('#notice')).toContainText('Detected order: 2 → 4 → 1 → 3');
 });
 
 test('manual reordering takes precedence, removal and clear release results', async ({ page }) => {
@@ -155,7 +171,7 @@ test('unrelated images require explicit stacking before exporting', async ({ pag
   await expect(page.getByRole('button', { name: 'Save PNG' })).toBeDisabled();
   await expect(page.locator('#notice')).toContainText('Review the joins');
   await expect(page.locator('#output-canvas')).toHaveAttribute('height', '600');
-  await page.getByRole('button', { name: 'Use 0 px' }).click();
+  await page.getByRole('button', { name: 'Stack without matching' }).click();
   await expectFinished(page);
   await expect(page.getByRole('button', { name: 'Save PNG' })).toBeEnabled();
   await expect(page.locator('#output-canvas')).toHaveAttribute('height', '600');

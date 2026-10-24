@@ -1,9 +1,10 @@
-Version **1.0.2** fixes a rejected overlap in text conversations:
+Version **1.0.3** improves registration of screenshots with changing fixed headers:
 
-- Matching text and image details can verify an overlap when message-bubble shading changes as the screen scrolls.
-- The matcher checks detailed content before rejecting a promising alignment based on its average color difference.
-- Ambiguous matches, plain backgrounds, and similar bubbles containing different text still require review.
-- Added fictional regression coverage for changing bubble colors and content preservation. The website and this iPhone build use the same corrected engine.
+- Header detection uses brightness and shape evidence instead of treating a small change in glass tint as the start of the conversation.
+- Content regions can propose a scroll alignment independently of an uncertain header estimate; the full overlap must still verify it.
+- Distinct competing alignments remain in the comparison, including repeated stickers and emoji.
+- The manual zero-overlap action is now labeled **Stack without matching**, with an explanation that it leaves repeated content in the result.
+- Added fictional regression coverage for changing headers, repeated stickers, and crops that could hide different messages. The website and this iPhone build use the same engine.
 
 An unsigned **ARM64 iPhoneOS Release build** for people to sign with their own sideloading tool. No Apple account, signing certificate, or provisioning profile was used to build this IPA.
 

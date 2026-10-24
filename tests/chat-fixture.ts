@@ -32,6 +32,25 @@ function glyphs(image: PixelImage, x: number, y: number, count: number, seed: nu
   }
 }
 
+function robotSticker(image: PixelImage, x: number, y: number) {
+  // Repeated fictional artwork, independent of system emoji and user images.
+  rect(image, x + 4, y, 42, 47, [218, 226, 228]);
+  rect(image, x, y + 11, 50, 28, [218, 226, 228]);
+  rect(image, x + 9, y + 13, 10, 12, [12, 12, 14]);
+  rect(image, x + 31, y + 13, 10, 12, [12, 12, 14]);
+  rect(image, x + 13, y + 39, 25, 18, [218, 226, 228]);
+  for (let i = 0; i < 4; i++) rect(image, x + 17 + i * 5, y + 42, 2, 14, [70, 70, 75]);
+}
+
+function tintContactPill(image: PixelImage) {
+  for (let y = 60; y < 92; y++) for (let x = 70; x < 250; x++) {
+    const p = (y * WIDTH + x) * 4;
+    image.data[p] = image.data[p]! + 4;
+    image.data[p + 1] = image.data[p + 1]! + 3;
+    image.data[p + 2] = image.data[p + 2]! + 6;
+  }
+}
+
 function bars(body: PixelImage): PixelImage {
   const result = canvas(HEADER + body.height + FOOTER);
   result.data.set(body.data, HEADER * WIDTH * 4);
@@ -148,6 +167,78 @@ export function tintedChatFixture(
     return bars(body);
   });
   return { images, starts, height: source.height + HEADER + FOOTER };
+}
+
+/** Repeated fictional sticker artwork beneath a subtly changing glass header. */
+export function glassHeaderFixture(changingHeader = true) {
+  const starts = [0, 340, 650, 880];
+  const source = canvas(starts.at(-1)! + VIEWPORT);
+  const message = (y: number, seed: number, right = false) => {
+    const x = right ? 120 : 44;
+    rect(source, x, y, 185, 39, right ? [12, 148, 249] : [39, 39, 43]);
+    glyphs(source, x + 10, y + 10, 22, seed);
+    glyphs(source, x + 10, y + 24, 15, seed + 3);
+  };
+  [18, 91, 170, 245, 467, 548, 915, 1010, 1120, 1230, 1320].forEach((y, index) =>
+    message(y, 1800 + index * 113, index % 3 === 1));
+  robotSticker(source, 235, 366);
+  robotSticker(source, 50, 667);
+  robotSticker(source, 235, 804);
+  const images = starts.map((start, index) => {
+    const body: PixelImage = { width: WIDTH, height: VIEWPORT,
+      data: source.data.slice(start * WIDTH * 4, (start + VIEWPORT) * WIDTH * 4) };
+    const image = bars(body);
+    rect(image, 70, 60, 180, 32, [25, 25, 26]);
+    glyphs(image, 79, 67, 23, 42);
+    glyphs(image, 79, 79, 23, 70);
+    if (changingHeader && index === 1) {
+      // The glass takes on a small tint from the scrolling content beneath it.
+      tintContactPill(image);
+    }
+    return image;
+  });
+  return { images, starts, height: source.height + HEADER + FOOTER, source,
+    header: HEADER, footer: FOOTER };
+}
+
+/** The same detailed sticker repeats, so several translations are plausible. */
+export function periodicStickerFixture() {
+  const source = canvas(900);
+  for (let y = 12; y < source.height; y += 135) robotSticker(source, 235, y);
+  return [0, 187].map(start => bars({ width: WIDTH, height: VIEWPORT,
+    data: source.data.slice(start * WIDTH * 4, (start + VIEWPORT) * WIDTH * 4) }));
+}
+
+/** Disjoint parts of a thread reuse a sticker, but share no scrolling content. */
+export function sharedStickerOnlyFixture() {
+  const { images } = glassHeaderFixture(false);
+  const second = images[2]!;
+  tintContactPill(second);
+  return [images[0]!, second];
+}
+
+/** A tempting common sticker is below contradictory messages, not app chrome. */
+export function headerCropTrapFixture() {
+  return [0, 1].map(index => {
+    const image = bars(canvas(VIEWPORT));
+    rect(image, 70, 60, 180, 32, [25, 25, 26]);
+    glyphs(image, 79, 67, 23, 42);
+    glyphs(image, 79, 79, 23, 70);
+    if (index) tintContactPill(image);
+    for (const [y, seed] of index ? [[120, 9900]] : [[140, 1100], [380, 2200]]) {
+      rect(image, 45, y!, 240, 30, [38, 38, 42]);
+      glyphs(image, 54, y! + 8, 28, seed!);
+      glyphs(image, 54, y! + 19, 22, seed! + 5);
+    }
+    const y = index ? 210 : 470;
+    robotSticker(image, 235, y);
+    // More texture below the face makes this a strong but isolated local match.
+    for (let row = 0; row < 8; row++) {
+      rect(image, 240 + row % 3 * 4, y + 60 + row * 6, 39 - row % 5 * 3, 3,
+        [60 + row * 20, 220 - row * 13, 60 + row * 17]);
+    }
+    return image;
+  });
 }
 
 export function renderPlan(images: PixelImage[], plan: StitchPlan): PixelImage {

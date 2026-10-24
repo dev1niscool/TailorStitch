@@ -159,12 +159,34 @@ function rowError(a: Signature, ay: number, b: Signature, by: number): number {
   // This is only chrome detection; overlap matching still uses the full width.
   const sideColumns = 8;
   for (let x = sideColumns; x < COLUMNS - sideColumns; x++) {
-    for (let c = 0; c < 3; c++) {
-      error += Math.abs(a.values[ay * CHANNELS + x * 3 + c]! -
-        b.values[by * CHANNELS + x * 3 + c]!);
-    }
+    const ai = ay * CHANNELS + x * 3;
+    const bi = by * CHANNELS + x * 3;
+    // Glass-like toolbars can change hue as the underlying content scrolls.
+    // Their luminance structure remains stationary. RGB color is still used
+    // for content matching; it must not define the viewport by itself.
+    const av = a.values[ai]! * 0.299 + a.values[ai + 1]! * 0.587 + a.values[ai + 2]! * 0.114;
+    const bv = b.values[bi]! * 0.299 + b.values[bi + 1]! * 0.587 + b.values[bi + 2]! * 0.114;
+    error += Math.abs(av - bv);
   }
-  return error / ((COLUMNS - sideColumns * 2) * 3);
+  return error / (COLUMNS - sideColumns * 2);
+}
+
+/** One bounded brightness change may affect an entire stationary glass row. */
+function rowShapeError(a: Signature, ay: number, b: Signature, by: number): number {
+  const differences: number[] = [];
+  let sum = 0;
+  for (let x = 8; x < COLUMNS - 8; x++) {
+    const ai = ay * CHANNELS + x * 3;
+    const bi = by * CHANNELS + x * 3;
+    const difference = (a.values[ai]! - b.values[bi]!) * 0.299 +
+      (a.values[ai + 1]! - b.values[bi + 1]!) * 0.587 +
+      (a.values[ai + 2]! - b.values[bi + 2]!) * 0.114;
+    differences.push(difference);
+    sum += difference;
+  }
+  const brightness = sum / differences.length;
+  if (Math.abs(brightness) > 12) return Infinity;
+  return differences.reduce((total, value) => total + Math.abs(value - brightness), 0) / differences.length;
 }
 
 function fixedBars(
@@ -257,10 +279,12 @@ interface DetailEvidence {
   edges: number;
   mismatchedFraction: number;
   structuralMatch: boolean;
+  consistentRegions: boolean;
 }
 
 function verifyDetails(
   first: PixelImage, second: PixelImage, aStart: number, bStart: number, overlap: number,
+  checkRegions = false,
 ): DetailEvidence {
   const xStep = Math.max(1, Math.floor(first.width / 420));
   const yStep = Math.max(1, Math.floor(overlap / 1000));
@@ -285,6 +309,9 @@ function verifyDetails(
   const errors = shifts.map(() => ({ edges: 0, mismatched: 0, error: 0,
     structuralMismatches: 0, corners: 0, matchingCornerRows: 0,
     firstMatchingRow: overlap, lastMatchingRow: 0,
+    rowEdges: new Uint32Array(checkRegions ? overlap : 0),
+    rowDisagreements: new Uint32Array(checkRegions ? overlap : 0),
+    consistentRegions: true,
     regionCorners: new Uint32Array(9), regionMatches: new Uint32Array(9) }));
   for (let offset = 1; offset < overlap - 1; offset += yStep) {
     const ay = aStart + offset;
@@ -327,6 +354,10 @@ function verifyDetails(
         const magnitude = Math.max(20, aMagnitude + Math.hypot(bx, byGradient));
         const agrees = (ax - bx) ** 2 + (ad - byGradient) ** 2 <= (0.38 * magnitude) ** 2;
         if (!agrees) result.structuralMismatches++;
+        if (checkRegions) result.rowEdges[offset] = result.rowEdges[offset]! + 1;
+        if (checkRegions && !agrees && difference > 24) {
+          result.rowDisagreements[offset] = result.rowDisagreements[offset]! + 1;
+        }
         const corner = Math.max(Math.abs(ax), Math.abs(bx)) > 20 &&
           Math.max(Math.abs(ad), Math.abs(byGradient)) > 20;
         // A rounded bubble perimeter also has two-dimensional gradients. Text
@@ -352,6 +383,25 @@ function verifyDetails(
       }
     }
   }
+  const margin = Math.max(2, Math.round(first.width * 0.015));
+  const window = Math.max(12, Math.round(first.width * 0.06));
+  for (const result of checkRegions ? errors : []) {
+    // A large shared photograph or sticker must not outvote a smaller block of
+    // contradictory text. Inspect overlapping local bands as well as the total
+    // edge count; the outer fringe can contain a partially obscuring toolbar.
+    for (let start = margin; start < overlap - margin; start += Math.max(1, Math.floor(window / 2))) {
+      let edges = 0;
+      let disagreements = 0;
+      for (let row = start; row < Math.min(overlap - margin, start + window); row++) {
+        edges += result.rowEdges[row]!;
+        disagreements += result.rowDisagreements[row]!;
+      }
+      if (edges >= 48 && disagreements / edges > 0.3) {
+        result.consistentRegions = false;
+        break;
+      }
+    }
+  }
   const structuralMatch = errors.some(result => {
     const supported = [...result.regionCorners].map((count, region) =>
       count >= 16 && result.regionMatches[region]! / count >= 0.8);
@@ -359,15 +409,17 @@ function verifyDetails(
       supported.slice(band * 3, band * 3 + 3).some(Boolean));
     // Long bubble outlines or a matching icon alone are insufficient. Require
     // many corner-like features across separate rows and vertical regions.
-    return result.edges >= 128 && result.corners >= 64 &&
+    return result.consistentRegions && result.edges >= 128 && result.corners >= 64 &&
       result.structuralMismatches / result.edges <= 0.2 &&
       result.matchingCornerRows >= 6 && supportedBands.length >= 2 &&
       result.lastMatchingRow - result.firstMatchingRow >= Math.max(12, first.width * 0.04);
   });
-  errors.sort((a, b) => a.mismatched - b.mismatched || a.error - b.error);
+  errors.sort((a, b) => Number(b.consistentRegions) - Number(a.consistentRegions) ||
+    a.mismatched - b.mismatched || a.error - b.error);
   const best = errors[0]!;
   return { edges: best.edges,
-    mismatchedFraction: best.edges ? best.mismatched / best.edges : 0, structuralMatch };
+    mismatchedFraction: best.edges ? best.mismatched / best.edges : 0, structuralMatch,
+    consistentRegions: best.consistentRegions };
 }
 
 /**
@@ -408,12 +460,155 @@ function seamOffset(
   return best;
 }
 
+/** A content tile votes only for a distinctive translation, not a similar icon. */
+function contentOffsets(a: Signature, b: Signature, width: number, top: number, bottom: number): number[] {
+  const tile = Math.max(16, Math.round(width * 0.055));
+  const bins = 20;
+  const usable = b.height - top - bottom - tile;
+  if (usable <= 0) return [];
+  const votes: { shift: number; row: number; score: number }[] = [];
+  for (let bin = 0; bin < bins; bin++) {
+    const begin = top + Math.floor(usable * bin / bins);
+    const end = top + Math.floor(usable * (bin + 1) / bins);
+    let by = begin;
+    let energy = 0;
+    for (let row = begin; row < end; row += 3) {
+      let detail = 0;
+      for (let dy = 0; dy < tile; dy += 3) detail += b.energy[row + dy]!;
+      if (detail > energy) { energy = detail; by = row; }
+    }
+    if (energy < tile * 1.5) continue;
+    const candidates: { shift: number; match: Candidate }[] = [];
+    for (let ay = by + 1; ay + tile <= a.height - bottom; ay += 4) {
+      candidates.push({ shift: ay - by,
+        match: evaluate(a, b, ay + tile, by, tile, true, 10) });
+    }
+    candidates.sort((x, y) => x.match.score - y.match.score);
+    const first = candidates[0];
+    if (!first || first.match.informative < 5 || first.match.score > 8) continue;
+    const runner = candidates.find(x => Math.abs(x.shift - first.shift) > tile / 2);
+    if (runner && runner.match.score - first.match.score < Math.max(0.8, first.match.score * 0.2)) continue;
+    let best: typeof first | undefined;
+    for (let shift = Math.max(1, first.shift - 4); shift <= first.shift + 4; shift++) {
+      if (by + shift + tile > a.height - bottom) continue;
+      const match = evaluate(a, b, by + shift + tile, by, tile, false, 24);
+      if (!best || match.score < best.match.score) best = { shift, match };
+    }
+    if (!best || best.match.score > 8 || best.match.informative < 5) continue;
+    votes.push({ shift: best.shift, row: by, score: best.match.score });
+  }
+  // Keep independent displacement basins. Several rows of a repeated sticker
+  // are not several independent positions: one vote per source tile is capped.
+  const clusters: { votes: typeof votes; shift: number }[] = [];
+  for (const vote of [...votes].sort((x, y) => x.shift - y.shift)) {
+    const cluster = clusters.find(x => Math.abs(x.shift - vote.shift) <= 2);
+    if (cluster) {
+      cluster.votes.push(vote);
+      cluster.shift = Math.round(cluster.votes.reduce((sum, x) => sum + x.shift, 0) / cluster.votes.length);
+    } else clusters.push({ votes: [vote], shift: vote.shift });
+  }
+  return clusters.filter(x => x.votes.length >= 2 &&
+    Math.max(...x.votes.map(v => v.row)) - Math.min(...x.votes.map(v => v.row)) >= tile)
+    .sort((x, y) => y.votes.length - x.votes.length ||
+      x.votes.reduce((sum, v) => sum + v.score, 0) - y.votes.reduce((sum, v) => sum + v.score, 0))
+    .slice(0, 4).map(x => x.shift);
+}
+
+/** Stationary evidence proposes boundaries; moving content must verify them. */
+function headerHypotheses(a: Signature, b: Signature, top: number, bottom: number, initial: number): number[] {
+  const limit = Math.floor((Math.min(a.height, b.height) - top - bottom) * 0.35);
+  const candidates = new Set([initial]);
+  let equalRun = 0;
+  let stationary = 0;
+  let movingRun = 0;
+  for (let row = 0; row < limit; row++) {
+    const equal = rowError(a, top + row, b, top + row) <= 1.6;
+    const stationaryShape = equal || rowShapeError(a, top + row, b, top + row) <= 1.6;
+    if (stationaryShape) stationary++;
+    if (equal) { equalRun++; }
+    else {
+      if (equalRun >= 4 && stationary / Math.max(1, row) >= 0.6) candidates.add(row);
+      equalRun = 0;
+    }
+    // A mild glass tint may interrupt exact stationarity. Actual moving
+    // content changes row shape: never scan past it to a convenient blank gap
+    // and mislabel the intervening messages as another part of the header.
+    movingRun = !stationaryShape ? movingRun + 1 : 0;
+    if (movingRun >= 3) break;
+  }
+  return [...candidates].sort((x, y) => x - y).slice(0, 12);
+}
+
+/**
+ * Recover registration without assuming the first fixed-bar estimate is right.
+ * Local tiles propose raw y translations; every proposal is checked against its
+ * entire remaining overlap, so one repeated emoji cannot erase contradictions.
+ */
+function recoverRegistration(
+  first: PixelImage, second: PixelImage, options: MatchOptions, original: PairMatch,
+): PairMatch {
+  const [top, bottom] = crops(first, options);
+  const a = signature(first);
+  const b = signature(second);
+  const offsets = contentOffsets(a, b, first.width, top, bottom);
+  const originalShift = first.height - bottom - original.bottomTrim -
+    top - original.topTrim - original.overlap;
+  // The initial full-view search is another independent proposal source. A
+  // small overlap can contain only one useful tile; the complete re-search
+  // below still has to rule out every competing translation.
+  if (original.overlap > 0 && originalShift > 0 &&
+      !offsets.some(shift => Math.abs(shift - originalShift) <= 2)) offsets.push(originalShift);
+  if (!offsets.length) return original;
+  const headers = headerHypotheses(a, b, top, bottom, original.topTrim);
+  const aEnd = first.height - bottom - original.bottomTrim;
+  const minOverlap = Math.max(8, options.minOverlap ?? Math.max(16, Math.round(first.width * 0.02)));
+  const proposals: { shift: number; match: Candidate; topTrim: number }[] = [];
+  for (const offset of offsets) {
+    for (let shift = Math.max(1, offset - 1); shift <= offset + 1; shift++) {
+      for (const topTrim of headers) {
+        const bStart = top + topTrim;
+        const overlap = aEnd - shift - bStart;
+        if (overlap < minOverlap || bStart + overlap > second.height - bottom - original.bottomTrim) continue;
+        const match = evaluate(a, b, aEnd, bStart, overlap, false, 1024);
+        if (match.informative < 5 || match.score > 8) continue;
+        proposals.push({ shift, match, topTrim });
+      }
+    }
+  }
+  // Do not let a family of neighboring offsets crowd other translation basins
+  // out of verification. Retain one best boundary/offset for each voted basin.
+  const basins = offsets.map(offset => proposals.filter(x => Math.abs(x.shift - offset) <= 1)
+    .sort((x, y) => x.match.score - y.match.score || y.match.overlap - x.match.overlap)[0])
+    .filter((x): x is NonNullable<typeof x> => !!x);
+  const accepted: { candidate: typeof basins[number]; verified: PairMatch }[] = [];
+  for (const candidate of basins) {
+    // Re-search the entire overlap under this boundary hypothesis. Votes only
+    // propose registration; they must not hide a periodic alternative that a
+    // tile near the end of the image could not see.
+    const verified = analyzeViewport(first, second, options,
+      { topTrim: candidate.topTrim, bottomTrim: original.bottomTrim });
+    const verifiedShift = aEnd - top - verified.topTrim - verified.overlap;
+    if (verified.status === 'matched' && Math.abs(verifiedShift - candidate.shift) <= 1) {
+      accepted.push({ candidate, verified });
+    }
+  }
+  if (accepted.length !== 1) return original;
+  const { candidate: best, verified } = accepted[0]!;
+  // A second, similarly good full-overlap alignment remains ambiguous even if
+  // its exact pixels fell just outside the final detail threshold.
+  if (basins.some(x => Math.abs(x.shift - best.shift) > 3 &&
+      x.match.score <= best.match.score + Math.max(0.65, best.match.score * 0.14))) return original;
+  return { ...verified,
+    reason: 'The scroll alignment was verified after refining the fixed header.' };
+}
+
 /**
  * Find the bottom-of-first / top-of-second overlap. No pixels are changed.
  * Input widths must already be normalized by the caller.
  */
-export function analyzePair(
+function analyzeViewport(
   first: PixelImage, second: PixelImage, options: MatchOptions = {},
+  barOverride?: { topTrim: number; bottomTrim: number },
 ): PairMatch {
   validate(first);
   validate(second);
@@ -428,8 +623,8 @@ export function analyzePair(
   }
   const a = signature(first);
   const b = signature(second);
-  const bars = options.trimFixedBars === false ? { topTrim: 0, bottomTrim: 0 } :
-    fixedBars(a, b, top, bottom);
+  const bars = barOverride ?? (options.trimFixedBars === false ? { topTrim: 0, bottomTrim: 0 } :
+    fixedBars(a, b, top, bottom));
   const bStart = top + bars.topTrim;
   const aEnd = first.height - bottom - bars.bottomTrim;
   const maxOverlap = Math.min(
@@ -470,8 +665,18 @@ export function analyzePair(
   const refined = [...candidates].map(overlap =>
     evaluate(a, b, aEnd, bStart, overlap, false, 112));
   refined.sort((x, y) => x.score - y.score);
-  // Verify the leading peaks densely so sparse sampling cannot hide a mismatch.
-  const verified = refined.slice(0, 18).map(candidate =>
+  // Keep distinct alignment basins through dense verification. A run of nearby
+  // offsets must not crowd a repeated-content alternative out of the shortlist.
+  const distinct: Candidate[] = [];
+  for (const candidate of refined) {
+    if (distinct.every(x => Math.abs(x.overlap - candidate.overlap) > stride * 2)) {
+      distinct.push(candidate);
+      if (distinct.length >= 12) break;
+    }
+  }
+  const denseCandidates = new Map([...refined.slice(0, 18), ...distinct]
+    .map(candidate => [candidate.overlap, candidate]));
+  const verified = [...denseCandidates.values()].map(candidate =>
     evaluate(a, b, aEnd, bStart, candidate.overlap, false, 1024));
   verified.sort((x, y) => x.score - y.score);
   const best = verified[0]!;
@@ -495,7 +700,11 @@ export function analyzePair(
   // If neither appearance nor layout agrees, there is no promising alignment
   // to verify. Bound dense work to the single best unambiguous candidate.
   if (rankingError > 16) return noMatch('No matching overlap was found. Check screenshot order.');
-  const details = verifyDetails(first, second, aEnd - best.overlap, bStart, best.overlap);
+  const details = verifyDetails(first, second, aEnd - best.overlap, bStart, best.overlap, !!barOverride);
+  if (!details.consistentRegions) {
+    return { overlap: best.overlap, confidence: Math.min(0.5, confidence), status: 'uncertain', ...bars,
+      reason: 'Some text or image regions disagree within the overlap. Review the join.' };
+  }
   const appearanceGap = alternatives.length ? Math.min(...alternatives.map(candidate =>
     candidate.error + 1 / Math.sqrt(candidate.overlap))) -
     (best.error + 1 / Math.sqrt(best.overlap)) : 20;
@@ -522,6 +731,15 @@ export function analyzePair(
   }
   return { overlap: best.overlap, confidence, status: 'matched', ...bars,
     reason: 'A detailed matching overlap was found.' };
+}
+
+/** Match appearance first, then recover from independently registered content. */
+export function analyzePair(
+  first: PixelImage, second: PixelImage, options: MatchOptions = {},
+): PairMatch {
+  const result = analyzeViewport(first, second, options);
+  if (result.status === 'matched' || result.status === 'duplicate' || options.trimFixedBars === false) return result;
+  return recoverRegistration(first, second, options, result);
 }
 
 function findOrder(
