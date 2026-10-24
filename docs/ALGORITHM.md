@@ -65,16 +65,45 @@ of cutting at the viewport edge. This avoids including partially obscured
 messages and translucent composer borders when the estimated bar boundary is
 a few pixels off. The chosen seam changes which screenshot supplies the shared
 pixels, without changing the inferred translation or total output height.
-Manual overlaps retain their explicitly requested cut.
+Visual manual cuts retain their explicitly requested source rows.
 
-Exact duplicate images are skipped. Optional ordering searches for an
-unambiguous directed chain of matching screenshots. When the order is
-inconclusive, the supplied order is retained.
+Exact duplicate images are skipped. Optional ordering compares complete directed
+paths through every remaining screenshot, using only verified pairwise matches.
+A bounded dynamic program retains the best and runner-up paths; overlap support
+and confidence determine edge weights. An order is accepted only when the best
+complete path is sufficiently stronger than its alternative. A short repeated
+label pointing backward can no longer disqualify an otherwise well-supported
+full sequence merely by giving its first image an incoming edge. Disconnected
+images are never dropped to manufacture an order. Inconclusive ordering retains
+the supplied order.
 
 Uncertain or unrelated joins set `needsReview`. Their previews concatenate the
-screenshots without removing content. An explicit manual overlap resolves the
-join; manual overlaps are measured after the user crops and detected chrome.
+screenshots without removing content. An explicit confirmed cut resolves the join.
 No uncertain inferred cut is silently applied.
+
+### Visual join editing
+
+Each join exposes its actual `upperEnd` and `lowerStart` source rows, including
+an automatically chosen interior seam. The editor starts at those exact rows,
+so accepting an unchanged join preserves its pixels. `manualCuts` uses these
+absolute row boundaries: the upper end is exclusive and the lower start is
+inclusive. Global crops bound the available source regions. Adjacent joins must
+leave at least one row of each intervening image; conflicting manual cuts are
+rejected rather than silently deleting a screenshot.
+
+The editor first lets the user trim the upper image's bottom, then drag it over
+the lower image with a translucent overlay. Dragging down advances the lower start row. A dashed
+scissors line marks the cut, and a result view renders the retained regions.
+Display zoom and canvas resolution are independent of source coordinates.
+Pointer movement, keyboard controls, and preview update a draft only. Cancel
+leaves the plan untouched; confirmation stores source cuts and pins the current
+screenshot order so a later automatic ordering pass cannot attach them to a
+different pair. Changes to input order or global crops clear incompatible cuts.
+
+Source images remain immutable. The preview and export draw source rectangles
+from those originals, rather than repeatedly cropping or resampling a previous
+output. The legacy `manualOverlaps` engine option remains available for callers;
+the interface no longer requires entering an overlap in pixels.
 
 ## Practical limits
 
@@ -84,9 +113,9 @@ of the screen is a good starting point. Repeated list items, mostly blank
 screens, changing video or animation, expanding headers, sideways movement,
 and different layouts or zoom levels may need manual order or overlap
 adjustments. Matching cannot restore content that was never captured.
-Automatic ordering can remain inconclusive when a short repeated label supports
-a potential reverse join. The current order is retained, and unverified joins
-require review.
+Automatic ordering remains inconclusive when complete sequences have similarly
+strong evidence. The current order is retained, and unverified joins require
+review.
 
 Images passed to the engine must share a width and remain immutable. The caller
 controls decoding, width normalization, input/output memory limits, cancellation,
@@ -106,13 +135,44 @@ pixel comparisons or source-coordinate checks for missing/duplicated content.
 Tests also cover tinted fixed headers, repeated detailed stickers, and misleading
 header crops that could otherwise hide different messages. The browser suite
 imports fictional four-screenshot conversations and verifies automatic matching
-and export without manual overlap adjustments.
+and export without manual adjustments. Visual-editor tests use independently
+generated coordinate charts to check retained source pixels, draft cancellation,
+reopening, neighboring cuts, and pointer/touch interactions.
 Synthetic and bundled-fixture tests do not establish that every real-world
 app or screenshot can be automatically stitched.
 
 ## Research references
 
-The registration changes were informed by public source and documentation:
+The 1.1 editor and ordering changes were informed by source-level review of
+these eleven licensed open-source projects. The links pin the inspected revisions.
+Ideas were implemented independently in TypeScript; none of these libraries or
+their source code was added as an application dependency.
+
+| Project / license | What it does well | Application or limit here |
+| --- | --- | --- |
+| [ScrollSnap](https://github.com/Brkgng/ScrollSnap/blob/5be0a28f679358be658d4139d16465307f906c87/ScrollSnap/Managers/StitchingManager.swift) · MIT | Corroborates translation across spatial bands and bounds motion. | Supports requiring agreement across regions; repeated labels still need uniqueness checks. |
+| [OpenStitching](https://github.com/OpenStitching/stitching/blob/be1919b85c5b3935d16dcde0cdfa8ac7d7c7e03e/stitching/feature_matcher.py) · Apache-2.0 | Uses pairwise confidence graphs and global consistency. | Compare complete screenshot sequences. Do not discard disconnected inputs or warp/blend text as a panorama. |
+| [scikit-image registration](https://github.com/scikit-image/scikit-image/blob/69a0f1f215cdadf65ba9fb0f40b3f2e5ae2cbfd7/src/_skimage2/registration/_phase_cross_correlation.py) · BSD-3-Clause for inspected code | Separates shift proposals from real-space disambiguation; masks invalid overlap. | Preserve competing candidates and verify actual overlapping content. Do not average incompatible peaks. |
+| [Overmix](https://github.com/spillerrec/Overmix/blob/ebc2d3128a4024a7cb267ad0ecec210aa772efc7/src/aligners/IndependentAligner.cpp) · GPL-3.0-or-later | Separates comparison, alignment, and rendering; considers neighboring offsets. | Treat pair matches as evidence for a whole sequence. No GPL code copied, and no blending/subpixel reconstruction of text. |
+| [Android Stitch Screenshots](https://github.com/nikitabobko/android-stitch-screenshots/blob/e3cab622ef0b838553f9ed7e3586f19a718416b2/src/MainActivity.kt) · MIT | Keeps original bitmaps with independent junction cuts and dimmed excluded regions. | Independent source cuts and source-rectangle export, with additional constraints between neighboring joins. |
+| [AnLi image stitching](https://github.com/xfgryujk/AnLi-image-stitching/blob/65e478efaa71ced1694a76d79a034e50422e2aad/src/components/imageCanvas.vue) · MIT | Separates crop geometry from source images; provides reorder controls. | Preserve originals and render final cuts once. Per-image cuts are needed instead of shared subtitle-strip settings. |
+| [screenStitch](https://github.com/jaflo/screenStitch/blob/308d30130808aa34fca4dc34ad8b75603242c98e/screenStitch.py) · MIT | Separates stationary surroundings from the changing region. | Useful comparison: first-pair bounds and single-row exact matching are too brittle for changing headers and repeated chat labels. |
+| [Cropper.js](https://github.com/fengyuanchen/cropperjs/blob/d671590f32aa655eba87069b61b1e22ff0a2fb63/packages/element-selection/src/index.ts) · MIT | Keeps selection geometry separate, supports reset, keyboard movement, and invalid-change rejection. | Draft geometry, keyboard alternatives, reset, and bounded cuts without adding a general crop library. |
+| [React Easy Crop](https://github.com/ValentinH/react-easy-crop/blob/91bfd8f0928ead345e5126a539edab4657d82993/src/helpers.ts) · MIT | Explicit source/display transforms and separate continuous/committed changes. | Zoom-independent source coordinates and draft/confirm behavior; no React dependency. |
+| [TOAST UI Image Editor](https://github.com/nhn/tui.image-editor/blob/9ee993e21135a0bdb69d1400b19d89d7e78f7378/apps/image-editor/src/js/invoker.js) · MIT | Reversible commands and clear operation boundaries. | Keep unconfirmed edits local and restore existing cuts on reopen. Avoid raster recropping and the package's default hostname analytics. |
+| [TOCropViewController](https://github.com/TimOliver/TOCropViewController/blob/f71823b513d4966ed9a66294b8d164369b1abc7d/Objective-C/TOCropViewController/Views/TOCropView.m) · MIT | Generous touch targets, gesture-start geometry, reset, and source-bound export. | Large handles, stable drag deltas, and clamped source rows on touch screens. |
+
+For the interaction design, we also examined [Stitch It's official site](https://www.stitchitapp.com/),
+[its iPhone guide](https://www.stitchitapp.com/blog/how-to-stitch-screenshots-on-iphone),
+[official crop screenshot](https://www.stitchitapp.com/images/home/ios-crop.webp),
+and a [published hands-on review](https://bamka.info/screenshot-merge-stitchit).
+These illustrate transparent adjacent captures, independent top/bottom crops,
+dashed boundaries, and large handles. The two-step upper-trim / lower-cut gesture
+implements the requested workflow. An embedded YouTube link was found, but video
+playback was unavailable; the design conclusions come from the published text
+and screenshots.
+
+Earlier registration work was informed by these public sources:
 
 - [screenshot-stitcher](https://github.com/mate-matt/screenshot-stitcher/blob/af133ca54304f88a25c899d4c3c9b2976769a499/stitcher.py): multiple alignment proposals and overlap verification.
 - [Seamly's OffsetMatcher](https://github.com/LiLiKazine/Seamly.app/blob/ed371adfc13151f95c95b6e3e8e3ff8790075d8d/Seamly/StitchKit/Sources/StitchKit/OffsetMatcher.swift) and [ChromeStaticRowDetector](https://github.com/LiLiKazine/Seamly.app/blob/ed371adfc13151f95c95b6e3e8e3ff8790075d8d/Seamly/StitchKit/Sources/StitchKit/ChromeStaticRowDetector.swift): distinct tile votes and stationary-row evidence for changing chrome.

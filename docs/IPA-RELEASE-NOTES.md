@@ -1,10 +1,10 @@
-Version **1.0.3** improves registration of screenshots with changing fixed headers:
+Version **1.1.0** adds a visual join editor and improves automatic screenshot ordering:
 
-- Header detection uses brightness and shape evidence instead of treating a small change in glass tint as the start of the conversation.
-- Content regions can propose a scroll alignment independently of an uncertain header estimate; the full overlap must still verify it.
-- Distinct competing alignments remain in the comparison, including repeated stickers and emoji.
-- The manual zero-overlap action is now labeled **Stack without matching**, with an explanation that it leaves repeated content in the result.
-- Added fictional regression coverage for changing headers, repeated stickers, and crops that could hide different messages. The website and this iPhone build use the same engine.
+- Trim the bottom of the upper screenshot, then drag it over the lower screenshot with a translucent overlay. A dashed scissors line marks the lower cut.
+- Preview the exact retained image regions before confirming. Cancel discards the draft; reopen a join to revise its cuts. Zoom, large touch targets, and keyboard controls help fine alignment without entering pixel offsets.
+- Cuts reference the original images, and neighboring joins cannot silently erase an intervening screenshot.
+- Automatic ordering compares complete verified sequences, reducing failures caused by short repeated labels suggesting a reverse match. Inconclusive ordering keeps the supplied order with a warning.
+- The web and iPhone builds share these changes. Tests use fictional fixtures, including exact output-pixel checks and browser interaction coverage.
 
 An unsigned **ARM64 iPhoneOS Release build** for people to sign with their own sideloading tool. No Apple account, signing certificate, or provisioning profile was used to build this IPA.
 

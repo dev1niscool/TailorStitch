@@ -20,7 +20,7 @@ export const appMarkup = `
     </section>
     <section class="workspace" aria-label="Screenshot stitching workspace">
       <div class="workspace-top">
-        <div class="workspace-title"><span class="tiny-grid">▦</span> Your workspace <span class="beta-tag">1.0</span></div>
+        <div class="workspace-title"><span class="tiny-grid">▦</span> Your workspace <span class="beta-tag">1.1</span></div>
         <div class="local-label"><span class="status-dot"></span> Working locally</div>
       </div>
       <div class="workspace-body">
@@ -72,7 +72,7 @@ export const appMarkup = `
     </section>
     <section class="benefits" id="how-it-works" aria-label="How it works">
       <article><span class="benefit-number">01</span><div><h3>Scroll. Snap. Repeat.</h3><p>Capture your screen as you scroll, keeping a little of the previous screen visible.</p></div></article>
-      <article><span class="benefit-number">02</span><div><h3>Let the pieces find their place.</h3><p>Smart overlap detection lines up your images. You can fine-tune any join.</p></div></article>
+      <article><span class="benefit-number">02</span><div><h3>Let the pieces find their place.</h3><p>Smart overlap detection lines up your images. Drag and preview any join to fine-tune the cut.</p></div></article>
       <article><span class="benefit-number">03</span><div><h3>Keep the complete story.</h3><p>Save a crisp PNG, ready to share. No sign-up, upload, or watermark in the way.</p></div></article>
     </section>
   </main>

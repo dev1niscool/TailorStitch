@@ -1,6 +1,6 @@
 {
   "name": "tailorstitch",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Private, automatic screenshot stitching for the web and iPhone.",

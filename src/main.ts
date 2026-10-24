@@ -3,7 +3,8 @@ import { Capacitor } from '@capacitor/core';
 import { appMarkup } from './ui';
 import { icon } from './icons';
 import { shareImage } from './native';
-import type { PixelImage, PlanOptions, StitchPlan } from './engine';
+import type { ManualCut, PixelImage, PlanOptions, StitchPlan } from './engine';
+import { closeJoinEditor, openJoinEditor } from './join-editor';
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = appMarkup;
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -34,7 +35,7 @@ let worker: Worker | null = null;
 let run = 0;
 let busy = false;
 let zoom: number | null = null;
-let manualOverlaps: Record<number, number> = {};
+let manualCuts: Record<number, ManualCut> = {};
 let showAllJoins = false;
 let stopWorker: (() => void) | null = null;
 
@@ -61,6 +62,7 @@ function setBusy(value: boolean, label = 'Finding the perfect fit…') {
   $('drop-zone').setAttribute('aria-disabled', String(value));
 }
 function cancelWork() {
+  closeJoinEditor();
   run++;
   worker?.terminate();
   worker = null;
@@ -69,6 +71,7 @@ function cancelWork() {
   setBusy(false);
 }
 function clearResult() {
+  closeJoinEditor();
   currentPlan = null;
   outputBlob = null;
   canvas.width = canvas.height = 1;
@@ -102,7 +105,7 @@ function clearAll() {
   cancelWork();
   screenshots.forEach(release);
   screenshots = [];
-  manualOverlaps = {};
+  manualCuts = {};
   clearResult();
   notice();
   renderInputs();
@@ -152,6 +155,7 @@ async function addFiles(files: File[]) {
     notice('Choose up to 12 screenshots per stitch. Remove a few images or start a second stitch.', true);
     return;
   }
+  closeJoinEditor();
   const token = ++run;
   const additions: Screenshot[] = [];
   setBusy(true, 'Opening your screenshots…');
@@ -168,7 +172,7 @@ async function addFiles(files: File[]) {
       if (pixels > MAX_INPUT_PIXELS) throw new Error('This batch is too large for safe on-device processing. Use fewer screenshots (20 megapixels per batch).');
     }
     screenshots.push(...additions);
-    manualOverlaps = {};
+    manualCuts = {};
     clearResult();
     setBusy(false);
     renderInputs();
@@ -217,6 +221,7 @@ function getPlan(options: PlanOptions): Promise<StitchPlan> {
 }
 async function stitch() {
   if (busy || screenshots.length < 2) return;
+  closeJoinEditor();
   const token = ++run;
   setBusy(true);
   renderInputs();
@@ -228,7 +233,7 @@ async function stitch() {
       trimFixedBars: trimBars.checked,
       cropTop: Number(cropTop.value),
       cropBottom: Number(cropBottom.value),
-      manualOverlaps,
+      manualCuts,
     });
     if (token !== run) return;
     if (plan.height > MAX_OUTPUT_HEIGHT || plan.width * plan.height > MAX_OUTPUT_PIXELS) {
@@ -278,14 +283,61 @@ function renderJoins() {
   el.innerHTML = `
     <button class="join-disclosure" id="toggle-joins" aria-expanded="${plan.needsReview || showAllJoins}">${plan.needsReview ? 'Review uncertain joins' : `${showAllJoins ? 'Hide' : 'Fine-tune'} ${plan.joins.length} ${plan.joins.length === 1 ? 'join' : 'joins'}`} ${plan.needsReview ? '' : '↕'}</button>
     <div ${plan.needsReview || showAllJoins ? '' : 'hidden'}>
-      <p class="join-explanation">Overlap is the shared content in pixels, after crops and repeated bars. Stack without matching leaves repeated content in the result; it does not repair the join. Repeated-bar removal still follows your setting. Apply an overlap value to confirm a join.</p>
+      <p class="join-explanation">Trim the bottom of the upper photo, then drag it over the lower photo to line up shared content. Preview the scissors cut before applying it.</p>
       ${plan.joins.map((join, index) => {
         const resolved = join.status === 'matched';
-        const max = Math.min(screenshots[join.fromIndex]!.canvas.height, screenshots[join.toIndex]!.canvas.height) - Number(cropTop.value) - Number(cropBottom.value) - join.topTrim - join.bottomTrim - 1;
-        return `<div class="join-row"><div class="join-info"><strong>Screenshot ${join.fromIndex + 1} → ${join.toIndex + 1}</strong><span class="join-status ${resolved ? '' : 'review'}">${join.manual ? 'Manual' : resolved ? 'Matched' : 'Review'}</span><small>${escapeHTML(join.reason)}${join.topTrim || join.bottomTrim ? ` Bars: ${join.topTrim}px top, ${join.bottomTrim}px bottom.` : ''}</small></div><div class="join-controls"><label for="overlap-${index}">Overlap</label><input id="overlap-${index}" type="number" min="0" max="${Math.max(0, max)}" value="${join.appliedOverlap}" inputmode="numeric"><span>px</span><button class="button button-outline apply-overlap" data-join="${index}">Apply</button><button class="text-button stack-join" data-join="${index}">Stack without matching</button></div></div>`;
+        return `<div class="join-row"><div class="join-info"><strong>Screenshot ${join.fromIndex + 1} → ${join.toIndex + 1}</strong><span class="join-status ${resolved ? '' : 'review'}">${join.manual ? 'Manual' : resolved ? 'Matched' : 'Review'}</span><small>${escapeHTML(join.reason)}</small></div><div class="join-controls"><button class="button button-outline adjust-join" data-join="${index}" aria-label="Adjust visually, join ${index + 1}">✂ Adjust visually</button></div></div>`;
       }).join('')}
-      <button id="reset-joins" class="text-button">Reset manual adjustments</button>
+      <button id="reset-joins" class="text-button" ${Object.keys(manualCuts).length ? '' : 'hidden'}>Reset manual adjustments</button>
     </div>`;
+}
+async function adjustJoin(index: number) {
+  const plan = currentPlan;
+  const join = plan?.joins[index];
+  if (busy || !plan || !join) return;
+  const token = run;
+  const upper = screenshots[join.fromIndex]!;
+  const lower = screenshots[join.toIndex]!;
+  const upperStart = plan.joins[index - 1]?.lowerStart ?? Number(cropTop.value);
+  const lowerEnd = plan.joins[index + 1]?.upperEnd ?? lower.canvas.height - Number(cropBottom.value);
+  const unchanged = (proposed: ManualCut) => proposed.upperEnd === join.upperEnd && proposed.lowerStart === join.lowerStart;
+  const emptyInterval = (proposed: ManualCut) => proposed.upperEnd <= upperStart || proposed.lowerStart >= lowerEnd;
+  const cut = await openJoinEditor({
+    upper: upper.canvas,
+    lower: lower.canvas,
+    upperName: upper.name,
+    lowerName: lower.name,
+    upperStart,
+    upperEndLimit: upper.canvas.height - Number(cropBottom.value),
+    lowerStartLimit: Number(cropTop.value),
+    lowerEnd,
+    initial: { upperEnd: join.upperEnd, lowerStart: join.lowerStart },
+    validateCut: proposed => {
+      // Automatic matching can fully cover a redundant middle screenshot. An
+      // unchanged confirmation preserves it; new manual cuts must keep content.
+      if (emptyInterval(proposed) && !unchanged(proposed)) {
+        return 'A neighboring join already covers this photo. Keep some of each photo visible, or adjust the neighboring join first.';
+      }
+      const height = plan.height + proposed.upperEnd - join.upperEnd - proposed.lowerStart + join.lowerStart;
+      return height > MAX_OUTPUT_HEIGHT || height * plan.width > MAX_OUTPUT_PIXELS
+        ? 'This cut makes the result too large for your device. Keep less of the upper photo or move it farther down before applying.'
+        : null;
+    },
+  });
+  if (!cut || token !== run || currentPlan !== plan || busy) return;
+  if (unchanged(cut) && emptyInterval(cut)) return;
+  // A visual join refers to this exact pair. Pin the realized, deduplicated order
+  // only on confirmation, so cancel/open never changes the selected screenshots.
+  const ordered = plan.order.map(sourceIndex => screenshots[sourceIndex]!);
+  const retained = new Set(ordered);
+  screenshots.filter(item => !retained.has(item)).forEach(release);
+  screenshots = ordered;
+  autoOrder.checked = false;
+  manualCuts[index] = cut;
+  showAllJoins = true;
+  renderInputs();
+  await stitch();
+  if (currentPlan && !busy) document.querySelector<HTMLButtonElement>(`.adjust-join[data-join="${index}"]`)?.focus();
 }
 function fitPreview() {
   if (!currentPlan) return;
@@ -356,7 +408,7 @@ $('zoom-out').addEventListener('click', () => adjustZoom(-.25));
 $('zoom-fit').addEventListener('click', () => { zoom = null; fitPreview(); });
 window.addEventListener('resize', fitPreview);
 for (const control of [autoOrder, trimBars, cropTop, cropBottom]) control.addEventListener('change', () => {
-  manualOverlaps = {};
+  manualCuts = {};
   void stitch();
 });
 $('image-list').addEventListener('click', event => {
@@ -373,7 +425,7 @@ $('image-list').addEventListener('click', event => {
     [screenshots[index], screenshots[next]] = [screenshots[next]!, screenshots[index]!];
     autoOrder.checked = false;
   }
-  manualOverlaps = {};
+  manualCuts = {};
   clearResult();
   renderInputs();
   if (screenshots.length > 1) void stitch();
@@ -384,18 +436,9 @@ $('join-review').addEventListener('click', event => {
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button');
   if (!button) return;
   if (button.id === 'toggle-joins') { showAllJoins = !showAllJoins; renderJoins(); return; }
-  if (button.id === 'reset-joins') { manualOverlaps = {}; void stitch(); return; }
+  if (button.id === 'reset-joins') { manualCuts = {}; void stitch(); return; }
   const index = Number(button.dataset.join);
-  if (!Number.isInteger(index) || !currentPlan) return;
-  const field = $<HTMLInputElement>(`overlap-${index}`);
-  const value = button.classList.contains('stack-join') ? 0 : Number(field.value);
-  if (!Number.isInteger(value) || value < 0 || value > Number(field.max)) {
-    notice(`Enter an overlap from 0 to ${field.max} pixels.`, true);
-    return;
-  }
-  manualOverlaps[index] = value;
-  showAllJoins = true;
-  void stitch();
+  if (button.classList.contains('adjust-join') && Number.isInteger(index)) void adjustJoin(index);
 });
 $('demo-button').addEventListener('click', async () => {
   if (busy) return;

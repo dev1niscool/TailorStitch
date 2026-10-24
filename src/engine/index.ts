@@ -18,6 +18,15 @@ export interface PlanOptions extends MatchOptions {
   autoOrder?: boolean;
   /** Join positions in the final order, with overlaps in cropped content pixels. */
   manualOverlaps?: Record<number, number>;
+  /** Absolute source-row cuts, keyed by join position in the fixed input order. */
+  manualCuts?: Record<number, ManualCut>;
+}
+
+export interface ManualCut {
+  /** Keep the upper source up to, but excluding, this row. */
+  upperEnd: number;
+  /** Keep the lower source beginning at this row. */
+  lowerStart: number;
 }
 
 export type MatchStatus = 'matched' | 'uncertain' | 'unrelated' | 'duplicate';
@@ -32,11 +41,11 @@ export interface PairMatch {
   reason: string;
 }
 
-export interface JoinMatch extends PairMatch {
+export interface JoinMatch extends PairMatch, ManualCut {
   fromIndex: number;
   toIndex: number;
   manual: boolean;
-  /** Zero for an unresolved join: the preview never silently removes content. */
+  /** Automatic/legacy overlap; zero for unresolved joins and explicit source cuts. */
   appliedOverlap: number;
 }
 
@@ -742,41 +751,102 @@ export function analyzePair(
   return recoverRegistration(first, second, options, result);
 }
 
-function findOrder(
+/**
+ * Choose a complete chain of verified joins. Keep the two best histories for
+ * every subset/end state so a weak reverse edge cannot destroy the true start,
+ * and competing complete orders remain visible instead of being chosen greedily.
+ */
+export function findVerifiedOrder(
   indexes: number[], pair: (a: number, b: number) => PairMatch,
+  contentHeight: (index: number) => number,
 ): number[] | null {
-  if (indexes.length < 2) return indexes;
-  const starts = indexes.filter(index => !indexes.some(other =>
-    index !== other && pair(other, index).status === 'matched'));
-  if (starts.length !== 1) return null;
-  const order = [starts[0]!];
-  const remaining = new Set(indexes.filter(i => i !== order[0]));
-  while (remaining.size) {
-    const current = order[order.length - 1]!;
-    const next = [...remaining].map(index => ({ index, match: pair(current, index) }))
-      .filter(({ match }) => match.status === 'matched')
-      .sort((a, b) => b.match.overlap - a.match.overlap);
-    if (!next.length) return null;
-    if (next[1] && Math.abs(next[0]!.match.overlap - next[1].match.overlap) < 3) return null;
-    order.push(next[0]!.index);
-    remaining.delete(next[0]!.index);
+  const count = indexes.length;
+  if (count < 2) return [...indexes];
+  // The product accepts at most twelve images. A larger programmatic input can
+  // still stitch in its supplied order without unbounded combinatorial work.
+  if (count > 12) return null;
+  const weights = new Float64Array(count * count).fill(-Infinity);
+  for (let from = 0; from < count; from++) {
+    for (let to = 0; to < count; to++) {
+      if (from === to) continue;
+      const match = pair(indexes[from]!, indexes[to]!);
+      if (match.status !== 'matched') continue;
+      const coverage = clamp(match.overlap / Math.max(1,
+        Math.min(contentHeight(indexes[from]!), contentHeight(indexes[to]!))), 0, 1);
+      weights[from * count + to] = coverage * clamp(match.confidence, 0, 1);
+    }
   }
-  return order;
-}
-
-function trimTail(placements: Placement[], amount: number): void {
-  while (amount > 0 && placements.length) {
-    const last = placements[placements.length - 1]!;
-    const removed = Math.min(last.sh, amount);
-    last.sh -= removed;
-    last.dh -= removed;
-    amount -= removed;
-    if (!last.sh) placements.pop();
+  const states = (1 << count) * count * 2;
+  const scores = new Float64Array(states).fill(-Infinity);
+  const previousEnd = new Int8Array(states).fill(-1);
+  const previousRank = new Int8Array(states).fill(-1);
+  const at = (mask: number, end: number, rank: number) => (mask * count + end) * 2 + rank;
+  for (let start = 0; start < count; start++) scores[at(1 << start, start, 0)] = 0;
+  for (let mask = 1; mask < 1 << count; mask++) {
+    for (let end = 0; end < count; end++) {
+      if (!(mask & 1 << end)) continue;
+      for (let rank = 0; rank < 2; rank++) {
+        const score = scores[at(mask, end, rank)]!;
+        if (!Number.isFinite(score)) continue;
+        for (let next = 0; next < count; next++) {
+          if (mask & 1 << next) continue;
+          const edge = weights[end * count + next]!;
+          if (!Number.isFinite(edge)) continue;
+          const candidate = score + edge;
+          const nextMask = mask | 1 << next;
+          const first = at(nextMask, next, 0);
+          const second = first + 1;
+          if (candidate > scores[first]!) {
+            scores[second] = scores[first]!;
+            previousEnd[second] = previousEnd[first]!;
+            previousRank[second] = previousRank[first]!;
+            scores[first] = candidate;
+            previousEnd[first] = end;
+            previousRank[first] = rank;
+          } else if (candidate > scores[second]!) {
+            scores[second] = candidate;
+            previousEnd[second] = end;
+            previousRank[second] = rank;
+          }
+        }
+      }
+    }
   }
+  const full = (1 << count) - 1;
+  const complete: { end: number; rank: number; score: number }[] = [];
+  for (let end = 0; end < count; end++) for (let rank = 0; rank < 2; rank++) {
+    const score = scores[at(full, end, rank)]!;
+    if (Number.isFinite(score)) complete.push({ end, rank, score });
+  }
+  complete.sort((a, b) => b.score - a.score);
+  const best = complete[0];
+  if (!best) return null;
+  const runner = complete[1];
+  const margin = Math.max(0.04, best.score / (count - 1) * 0.12);
+  if (runner && best.score - runner.score < margin) return null;
+  const reversed: number[] = [];
+  let mask = full;
+  let end = best.end;
+  let rank = best.rank;
+  while (end >= 0) {
+    reversed.push(indexes[end]!);
+    const state = at(mask, end, rank);
+    mask ^= 1 << end;
+    end = previousEnd[state]!;
+    rank = previousRank[state]!;
+  }
+  return reversed.reverse();
 }
 
 /** Build drawImage-ready regions. Unresolved joins concatenate without data loss. */
 export function planStitch(images: PixelImage[], options: PlanOptions = {}): StitchPlan {
+  const visualKeys = Object.keys(options.manualCuts ?? {});
+  if (visualKeys.length && options.autoOrder) {
+    throw new Error('Visual join edits require a fixed screenshot order. Turn off automatic ordering.');
+  }
+  if (visualKeys.length && images.length < 2) {
+    throw new Error('Visual join edits require at least two screenshots.');
+  }
   if (!images.length) {
     return { width: 0, height: 0, order: [], skipped: [], placements: [],
       joins: [], warnings: [], needsReview: false };
@@ -795,6 +865,12 @@ export function planStitch(images: PixelImage[], options: PlanOptions = {}): Sti
     if (order.some(other => exactlyEqual(images[other]!, images[index]!))) skipped.push(index);
     else order.push(index);
   }
+  for (const key of visualKeys) {
+    const position = Number(key);
+    if (!Number.isInteger(position) || String(position) !== key || position < 0 || position >= order.length - 1) {
+      throw new Error('A visual join edit refers to a join that is no longer present.');
+    }
+  }
   const warnings: string[] = [];
   if (skipped.length) warnings.push(`${skipped.length} identical screenshot${skipped.length === 1 ? '' : 's'} skipped.`);
   const matches = new Map<string, PairMatch>();
@@ -808,7 +884,7 @@ export function planStitch(images: PixelImage[], options: PlanOptions = {}): Sti
     return match;
   };
   if (options.autoOrder && order.length > 1) {
-    const automatic = findOrder(order, pair);
+    const automatic = findVerifiedOrder(order, pair, index => images[index]!.height - top - bottom);
     if (automatic) order = automatic;
     else warnings.push('Automatic order was inconclusive. Your current order was kept.');
   }
@@ -823,37 +899,91 @@ export function planStitch(images: PixelImage[], options: PlanOptions = {}): Sti
   for (let position = 1; position < order.length; position++) {
     const fromIndex = order[position - 1]!;
     const toIndex = order[position]!;
-    let match = pair(fromIndex, toIndex);
+    const visual = options.manualCuts?.[position - 1];
     const override = options.manualOverlaps?.[position - 1];
-    const manual = override !== undefined;
-    if (manual) {
-      const max = Math.min(images[fromIndex]!.height, images[toIndex]!.height) -
-        top - bottom - match.topTrim - match.bottomTrim;
-      if (!Number.isFinite(override) || override < 0 || override > max) {
-        throw new Error(`The manual overlap for join ${position} must be between 0 and ${max} pixels.`);
+    const manual = visual !== undefined || override !== undefined;
+    const fromBottom = images[fromIndex]!.height - bottom;
+    const toBottom = images[toIndex]!.height - bottom;
+    let match: PairMatch;
+    let upperEnd: number;
+    let lowerStart: number;
+    if (visual !== undefined) {
+      if (!visual || !Number.isInteger(visual.upperEnd) || !Number.isInteger(visual.lowerStart) ||
+          visual.upperEnd <= top || visual.upperEnd > fromBottom ||
+          visual.lowerStart < top || visual.lowerStart >= toBottom) {
+        throw new Error(`The cut lines for join ${position} must be whole source rows within the cropped screenshots and keep at least one row from each screenshot.`);
       }
-      match = { ...match, overlap: Math.round(override), confidence: 1,
-        status: 'matched', reason: 'You set this overlap manually.' };
+      upperEnd = visual.upperEnd;
+      lowerStart = visual.lowerStart;
+      // Visual cuts describe exactly which source pixels the user chose. They
+      // deliberately bypass inferred chrome and overlap, including a bad match.
+      match = { overlap: 0, confidence: 1, status: 'matched', topTrim: 0, bottomTrim: 0,
+        reason: 'You aligned these screenshots visually.' };
+    } else {
+      match = pair(fromIndex, toIndex);
+      if (override !== undefined) {
+        const max = Math.min(images[fromIndex]!.height, images[toIndex]!.height) -
+          top - bottom - match.topTrim - match.bottomTrim;
+        if (!Number.isFinite(override) || override < 0 || override > max) {
+          throw new Error(`The manual overlap for join ${position} must be between 0 and ${max} pixels.`);
+        }
+        match = { ...match, overlap: Math.round(override), confidence: 1,
+          status: 'matched', reason: 'You set this overlap manually.' };
+      }
+      const accepted = match.status === 'matched';
+      const overlap = accepted ? match.overlap : 0;
+      const seam = accepted && !manual ?
+        seamOffset(images[fromIndex]!, images[toIndex]!, match, top, bottom) : overlap;
+      upperEnd = fromBottom - (accepted ? match.bottomTrim + overlap - seam : 0);
+      lowerStart = top + (accepted ? match.topTrim + seam : 0);
+    }
+    const previous = joins[position - 2];
+    const retainedStart = previous?.lowerStart ?? top;
+    const confirmedVisual = visual !== undefined || options.manualCuts?.[position - 2] !== undefined;
+    const minimumEnd = retainedStart + (confirmedVisual ? 1 : 0);
+    if (upperEnd < minimumEnd) {
+      if (manual) {
+        throw new Error(`The cut lines for joins ${position - 1} and ${position} overlap or remove screenshot ${position}. Move the lines apart to keep at least one row.`);
+      }
+      // Keep an automatic seam in the currently retained source interval. This
+      // preserves its inferred translation without consuming an earlier join.
+      const adjustment = minimumEnd - upperEnd;
+      const maximumEnd = fromBottom - match.bottomTrim;
+      if (minimumEnd <= maximumEnd && lowerStart + adjustment <= toBottom) {
+        upperEnd = minimumEnd;
+        lowerStart += adjustment;
+      } else {
+        match = { ...match, status: 'uncertain', confidence: Math.min(0.5, match.confidence),
+          reason: 'This join would cross the preceding cut. Align these screenshots visually.' };
+        upperEnd = fromBottom;
+        lowerStart = top;
+      }
     }
     const accepted = match.status === 'matched';
-    const overlap = accepted ? match.overlap : 0;
-    const topTrim = accepted ? match.topTrim : 0;
-    const bottomTrim = accepted ? match.bottomTrim : 0;
     if (!accepted) {
       needsReview = true;
       warnings.push(`Join ${position}: ${match.reason}`);
     }
-    joins.push({ ...match, fromIndex, toIndex, manual, appliedOverlap: overlap });
-    const seam = accepted && !manual ?
-      seamOffset(images[fromIndex]!, images[toIndex]!, match, top, bottom) : overlap;
-    trimTail(placements, bottomTrim + overlap - seam);
-    const sy = top + topTrim + seam;
-    const sh = images[toIndex]!.height - bottom - sy;
+    joins.push({ ...match, fromIndex, toIndex, manual,
+      appliedOverlap: accepted && visual === undefined ? match.overlap : 0, upperEnd, lowerStart });
     const last = placements[placements.length - 1];
-    if (sh > 0) placements.push({ imageIndex: toIndex, sx: 0, sy, sw: width, sh,
-      dx: 0, dy: last ? last.dy + last.dh : 0, dw: width, dh: sh });
+    const removed = fromBottom - upperEnd;
+    if (removed > 0) {
+      if (!last || last.imageIndex !== fromIndex || removed > last.sh) {
+        throw new Error(`Join ${position} would remove pixels kept by an earlier join. Move the cut lines apart.`);
+      }
+      last.sh -= removed;
+      last.dh -= removed;
+      if (!last.sh) placements.pop();
+    }
+    const sh = toBottom - lowerStart;
+    const tail = placements[placements.length - 1];
+    if (sh > 0) placements.push({ imageIndex: toIndex, sx: 0, sy: lowerStart, sw: width, sh,
+      dx: 0, dy: tail ? tail.dy + tail.dh : 0, dw: width, dh: sh });
+
   }
   const last = placements[placements.length - 1];
+  if (!last) throw new Error('The cut lines remove every image row. Keep part of at least one screenshot.');
   return { width, height: last ? last.dy + last.dh : 0, order, skipped,
     placements, joins, warnings, needsReview };
 }

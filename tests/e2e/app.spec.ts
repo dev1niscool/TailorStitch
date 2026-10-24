@@ -5,32 +5,11 @@ import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { readPng } from '../png-fixture';
 import { glassHeaderFixture, tintedChatFixture } from '../chat-fixture';
-import type { PixelImage } from '../../src/engine';
+import { applyVisualJoin, expectFinished, openVisualJoin, outputHash, selectPixelFixture, useDemo } from './helpers';
 
 const fixture = (name: string) => path.resolve('public/demo', name);
 const expected = readPng(pathToFileURL(path.resolve('tests/fixtures/demo-expected.png')));
 const expectedHash = createHash('sha256').update(expected.data).digest('hex');
-
-async function outputHash(page: Page) {
-  return page.locator('#output-canvas').evaluate(async element => {
-    const canvas = element as HTMLCanvasElement;
-    const data = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data;
-    const digest = await crypto.subtle.digest('SHA-256', data);
-    return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
-  });
-}
-
-async function expectFinished(page: Page) {
-  await expect(page.locator('#busy-overlay')).toBeHidden();
-  await expect(page.locator('#output-canvas')).toBeVisible();
-}
-
-async function useDemo(page: Page) {
-  await page.getByRole('button', { name: /Try it with an example/ }).click();
-  await expect(page.locator('#image-count')).toHaveText('3');
-  await expectFinished(page);
-  await expect(page.getByRole('button', { name: 'Save PNG' })).toBeEnabled();
-}
 
 async function syntheticPng(page: Page, name: string, width: number, color: string) {
   const base64 = await page.evaluate(({ width, color }) => {
@@ -43,21 +22,6 @@ async function syntheticPng(page: Page, name: string, width: number, color: stri
     return image.toDataURL('image/png').split(',')[1]!;
   }, { width, color });
   return { name, mimeType: 'image/png', buffer: Buffer.from(base64, 'base64') };
-}
-
-async function selectPixelFixture(page: Page, images: PixelImage[]) {
-  const pngs = await page.evaluate(images => images.map(image => {
-    const canvas = document.createElement('canvas');
-    canvas.width = image.width;
-    canvas.height = image.height;
-    const pixels = Uint8ClampedArray.from(atob(image.base64), byte => byte.charCodeAt(0));
-    canvas.getContext('2d')!.putImageData(new ImageData(pixels, image.width, image.height), 0, 0);
-    return canvas.toDataURL('image/png').split(',')[1]!;
-  }), images.map(image => ({ width: image.width, height: image.height,
-    base64: Buffer.from(image.data).toString('base64') })));
-  await page.locator('#file-input').setInputFiles(pngs.map((png, i) => ({
-    name: `fictional-chat-${i + 1}.png`, mimeType: 'image/png', buffer: Buffer.from(png, 'base64'),
-  })));
 }
 
 test.beforeEach(async ({ page }) => {
@@ -163,7 +127,7 @@ test('manual reordering takes precedence, removal and clear release results', as
   await expect(page.getByRole('button', { name: 'Save PNG' })).toBeDisabled();
 });
 
-test('unrelated images require explicit stacking before exporting', async ({ page }) => {
+test('unrelated images require explicit visual confirmation before exporting', async ({ page }) => {
   const red = await syntheticPng(page, 'red.png', 240, '#b22');
   const blue = await syntheticPng(page, 'blue.png', 240, '#226');
   await page.locator('#file-input').setInputFiles([red, blue]);
@@ -171,8 +135,8 @@ test('unrelated images require explicit stacking before exporting', async ({ pag
   await expect(page.getByRole('button', { name: 'Save PNG' })).toBeDisabled();
   await expect(page.locator('#notice')).toContainText('Review the joins');
   await expect(page.locator('#output-canvas')).toHaveAttribute('height', '600');
-  await page.getByRole('button', { name: 'Stack without matching' }).click();
-  await expectFinished(page);
+  await openVisualJoin(page);
+  await applyVisualJoin(page);
   await expect(page.getByRole('button', { name: 'Save PNG' })).toBeEnabled();
   await expect(page.locator('#output-canvas')).toHaveAttribute('height', '600');
   await expect(page.locator('.join-status')).toHaveText('Manual');
@@ -213,17 +177,8 @@ test('installed web assets reload and stitch without a connection', async ({ pag
   await context.setOffline(false);
 });
 
-test('join edits, crops and zoom remain usable', async ({ page }) => {
+test('crops and zoom remain usable', async ({ page }) => {
   await useDemo(page);
-  await page.getByRole('button', { name: /Fine-tune 2 joins/ }).click();
-  await expect(page.locator('#overlap-0')).toHaveValue('270');
-  await page.locator('#overlap-0').fill('250');
-  await page.locator('.apply-overlap').first().click();
-  await expectFinished(page);
-  await expect(page.locator('#output-canvas')).toHaveAttribute('height', '1600');
-  await page.getByRole('button', { name: 'Reset manual adjustments' }).click();
-  await expectFinished(page);
-  await expect(page.locator('#output-canvas')).toHaveAttribute('height', '1580');
   await page.getByRole('button', { name: 'Zoom in' }).click();
   await expect(page.locator('#zoom-value')).not.toHaveText('Fit');
   await page.getByRole('button', { name: 'Fit', exact: true }).click();
